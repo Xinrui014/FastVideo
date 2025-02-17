@@ -506,7 +506,7 @@ class HunyuanVideoSampler(Inference):
         # Pipeline inference
         # ========================================================================
         start_time = time.time()
-        samples = self.pipeline(
+        samples_lr, latents = self.pipeline(
             prompt=prompt,
             height=target_height,
             width=target_width,
@@ -524,8 +524,31 @@ class HunyuanVideoSampler(Inference):
             vae_ver=self.args.vae,
             enable_tiling=self.args.vae_tiling,
             enable_vae_sp=self.args.vae_sp,
-        )[0]
-        out_dict["samples"] = samples
+        )
+
+        samples, latents = self.pipeline(
+            prompt=prompt,
+            lr_fea=latents,
+            latents=0.6,
+            height=1088,
+            width=1920,
+            video_length=target_video_length,
+            num_inference_steps=infer_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_videos_per_prompt=num_videos_per_prompt,
+            generator=generator,
+            output_type="pil",
+            n_tokens=n_tokens,
+            embedded_guidance_scale=embedded_guidance_scale,
+            data_type="video" if target_video_length > 1 else "image",
+            is_progress_bar=True,
+            vae_ver=self.args.vae,
+            enable_tiling=self.args.vae_tiling,
+            enable_vae_sp=self.args.vae_sp,
+        )
+        out_dict["samples_lr"] = samples_lr[0]
+        out_dict["samples"] = samples[0]
         out_dict["prompts"] = prompt
 
         gen_time = time.time() - start_time

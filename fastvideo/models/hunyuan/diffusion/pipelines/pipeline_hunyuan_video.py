@@ -464,6 +464,16 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
                     f" {negative_prompt_embeds.shape}.")
 
+
+    def get_timesteps(self, num_inference_steps, timesteps, strength, device):
+        # get the original timestep using init_timestep
+        init_timestep = min(int(num_inference_steps * strength), num_inference_steps)
+
+        t_start = max(num_inference_steps - init_timestep, 0)
+        timesteps = timesteps[t_start * self.scheduler.order:]
+
+        return timesteps, num_inference_steps - t_start
+
     def prepare_latents(
         self,
         batch_size,
@@ -574,9 +584,11 @@ class HunyuanVideoPipeline(DiffusionPipeline):
     def __call__(
         self,
         prompt: Union[str, List[str]],
-        height: int,
-        width: int,
-        video_length: int,
+        lr_fea: Optional[torch.Tensor] = None,
+        strength: float = 1.0,
+        height: int = 720,
+        width: int = 1280,
+        video_length: int = 93,
         data_type: str = "video",
         num_inference_steps: int = 50,
         timesteps: List[int] = None,
@@ -821,6 +833,11 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             sigmas,
             **extra_set_timesteps_kwargs,
         )
+
+        # add timesteps with strength
+        timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, timesteps, strength, device)
+        latent_timestep = timesteps[:1].repeat(batch_size)
+
         if "884" in vae_ver:
             video_length = (video_length - 1) // 4 + 1
         elif "888" in vae_ver:
@@ -830,17 +847,36 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
         # 5. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels
-        latents = self.prepare_latents(
-            batch_size * num_videos_per_prompt,
-            num_channels_latents,
-            height,
-            width,
-            video_length,
-            prompt_embeds.dtype,
-            device,
-            generator,
-            latents,
-        )
+
+        if lr_fea is not None:
+            latents = lr_fea * self.vae.config.scaling_factor
+
+            # latents = F.interpolate(latents.to(device),
+            #                         size=(int(height / self.vae_scale_factor), int(width / self.vae_scale_factor)),
+            #                         mode='bicubic')
+            B, C, D, H, W = latents.shape  # B=1, C=16, D=32, H=h, W=w
+            latents_4d = latents.view(B, C * D, H, W)
+            latents_4d = F.interpolate(latents_4d, size=(int(height / self.vae_scale_factor), int(width / self.vae_scale_factor)), mode='bilinear')
+            latents = latents_4d.view(B, C, D, int(height / self.vae_scale_factor), int(width / self.vae_scale_factor))
+
+            noise_latents = []
+            noise = torch.randn_like(latents)
+            for timestep in timesteps:
+                noise_latent = self.scheduler.scale_noise(latents, timestep.unsqueeze(0), noise)
+                noise_latents.append(noise_latent)
+            latents = noise_latents[0]
+        else:
+            latents = self.prepare_latents(
+                batch_size * num_videos_per_prompt,
+                num_channels_latents,
+                height,
+                width,
+                video_length,
+                prompt_embeds.dtype,
+                device,
+                generator,
+                latents,
+            )
 
         world_size, rank = nccl_info.sp_size, nccl_info.rank_within_group
         if get_sequence_parallel_state():
@@ -882,6 +918,8 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     2) if self.do_classifier_free_guidance else latents)
                 latent_model_input = self.scheduler.scale_model_input(
                     latent_model_input, t)
+
+                print(latent_model_input.shape)
 
                 t_expand = t.repeat(latent_model_input.shape[0])
                 guidance_expand = (torch.tensor(
@@ -1007,4 +1045,4 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         if not return_dict:
             return image
 
-        return HunyuanVideoPipelineOutput(videos=image)
+        return HunyuanVideoPipelineOutput(videos=image), latents

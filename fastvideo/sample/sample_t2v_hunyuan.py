@@ -64,16 +64,47 @@ def main(args):
             batch_size=args.batch_size,
             embedded_guidance_scale=args.embedded_cfg_scale,
         )
-        videos = rearrange(outputs["samples"], "b c t h w -> t b c h w")
-        outputs = []
-        for x in videos:
-            x = torchvision.utils.make_grid(x, nrow=6)
-            x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)
-            outputs.append((x * 255).numpy().astype(np.uint8))
+        # videos = rearrange(outputs["samples"], "b c t h w -> t b c h w")
+        # outputs = []
+        # for x in videos:
+        #     x = torchvision.utils.make_grid(x, nrow=6)
+        #     x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)
+        #     outputs.append((x * 255).numpy().astype(np.uint8))
+        # os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
+        # imageio.mimsave(os.path.join(args.output_path, f"{prompt[:100]}.mp4"),
+        #                 outputs,
+        #                 fps=args.fps)
+
+        # Process high-resolution samples
+        high_res_video = outputs["samples"]
+        # Rearranging assuming shape: [batch, channels, time, height, width]
+        high_res_frames = []
+        frames_high = rearrange(high_res_video, "b c t h w -> t b c h w")
+        for frame in frames_high:
+            # Create a grid for multiple video samples (if more than one per prompt)
+            frame_grid = torchvision.utils.make_grid(frame, nrow=6)
+            frame_grid = frame_grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+            high_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
+
+        # Process low-resolution samples
+        low_res_video = outputs["samples_lr"]
+        low_res_frames = []
+        frames_low = rearrange(low_res_video, "b c t h w -> t b c h w")
+        for frame in frames_low:
+            frame_grid = torchvision.utils.make_grid(frame, nrow=6)
+            frame_grid = frame_grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+            low_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
+
+        # Make sure output directory exists
         os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
-        imageio.mimsave(os.path.join(args.output_path, f"{prompt[:100]}.mp4"),
-                        outputs,
-                        fps=args.fps)
+
+        # Save the high-resolution video
+        high_res_filename = os.path.join(args.output_path, f"{prompt[:100]}_high_res.mp4")
+        imageio.mimsave(high_res_filename, high_res_frames, fps=args.fps)
+
+        # Save the low-resolution video
+        low_res_filename = os.path.join(args.output_path, f"{prompt[:100]}_low_res.mp4")
+        imageio.mimsave(low_res_filename, low_res_frames, fps=args.fps)
 
 
 if __name__ == "__main__":
