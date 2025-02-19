@@ -8,7 +8,10 @@ from torch import nn
 from transformers import AutoTokenizer, T5EncoderModel
 
 from fastvideo.models.hunyuan.modules.models import (
-    HYVideoDiffusionTransformer, MMDoubleStreamBlock, MMSingleStreamBlock)
+    HYVideoDiffusionTransformer)
+# from fastvideo.models.hunyuan.modules.models_controlnet import HYVideoDiffusionTransformerControlNet
+from fastvideo.models.hunyuan.modules.models_controlnet import (
+    HYVideoDiffusionTransformerControlNet, MMDoubleStreamBlock, MMSingleStreamBlock)
 from fastvideo.models.hunyuan.text_encoder import TextEncoder
 from fastvideo.models.hunyuan.vae.autoencoder_kl_causal_3d import \
     AutoencoderKLCausal3D
@@ -243,7 +246,33 @@ def load_hunyuan_state_dict(model, dit_model_name_or_path):
             raise KeyError(
                 f"Missing key: `{load_key}` in the checkpoint: {model_path}. The keys in the checkpoint "
                 f"are: {list(state_dict.keys())}.")
-    model.load_state_dict(state_dict, strict=True)
+    model.load_state_dict(state_dict, strict=False)
+    return model
+
+
+def load_hunyuan_controlnet_state_dict(model, dit_model_name_or_path):
+    """Loads weights while properly mapping the double blocks."""
+    load_key = "module"
+    model_path = dit_model_name_or_path
+    state_dict = torch.load(model_path,
+                            map_location=lambda storage, loc: storage,
+                            weights_only=True)
+
+    if load_key in state_dict:
+        state_dict = state_dict[load_key]
+    else:
+        raise KeyError(
+            f"Missing key: `{load_key}` in the checkpoint: {model_path}. Available keys: {list(state_dict.keys())}."
+        )
+
+    # Load into main double_blocks
+    model.load_state_dict(state_dict, strict=False)
+
+    # 将 double_blocks 的权重复制到 parallel_double_blocks 上（假设 parallel 只有5个）
+    for i in range(len(model.parallel_double_blocks)):
+        model.parallel_double_blocks[i].load_state_dict(model.double_blocks[i].state_dict())
+
+    print("Weights loaded successfully!")
     return model
 
 
@@ -282,16 +311,29 @@ def load_transformer(
                 # torch_dtype=torch.bfloat16 if args.use_lora else torch.float32,
             )
     elif model_type == "hunyuan":
-        transformer = HYVideoDiffusionTransformer(
+            transformer = HYVideoDiffusionTransformer(
+                in_channels=16,
+                out_channels=16,
+                **hunyuan_config,
+                dtype=master_weight_type,
+            )
+            transformer = load_hunyuan_state_dict(transformer,
+                                                  dit_model_name_or_path)
+            if master_weight_type == torch.bfloat16:
+                transformer = transformer.bfloat16()
+
+    elif model_type == "hunyuan_controlnet":
+        transformer = HYVideoDiffusionTransformerControlNet(
             in_channels=16,
             out_channels=16,
             **hunyuan_config,
             dtype=master_weight_type,
         )
-        transformer = load_hunyuan_state_dict(transformer,
+        transformer = load_hunyuan_controlnet_state_dict(transformer,
                                               dit_model_name_or_path)
         if master_weight_type == torch.bfloat16:
             transformer = transformer.bfloat16()
+
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
     return transformer
@@ -363,6 +405,9 @@ def get_no_split_modules(transformer):
                 HunyuanVideoTransformerBlock)
     elif isinstance(transformer, HYVideoDiffusionTransformer):
         return (MMDoubleStreamBlock, MMSingleStreamBlock)
+    elif isinstance(transformer, HYVideoDiffusionTransformerControlNet):
+        return (MMDoubleStreamBlock,
+                MMSingleStreamBlock)
     else:
         raise ValueError(f"Unsupported transformer type: {type(transformer)}")
 

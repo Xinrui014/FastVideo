@@ -64,6 +64,7 @@ def get_mixed_precision(master_weight_type="fp32"):
 
 
 def get_dit_fsdp_kwargs(
+    args,
     transformer,
     sharding_strategy,
     use_lora=False,
@@ -72,6 +73,8 @@ def get_dit_fsdp_kwargs(
 ):
     no_split_modules = get_no_split_modules(transformer)
     if use_lora:
+        auto_wrap_policy = fsdp_auto_wrap_policy
+    elif args.model_type == "hunyuan_controlnet":
         auto_wrap_policy = fsdp_auto_wrap_policy
     else:
         auto_wrap_policy = functools.partial(
@@ -93,6 +96,7 @@ def get_dit_fsdp_kwargs(
         sharding_strategy = ShardingStrategy._HYBRID_SHARD_ZERO2
 
     device_id = torch.cuda.current_device()
+    print("cpu_offload", cpu_offload)
     cpu_offload = (torch.distributed.fsdp.CPUOffload(
         offload_params=True) if cpu_offload else None)
     fsdp_kwargs = {
@@ -102,8 +106,12 @@ def get_dit_fsdp_kwargs(
         "device_id": device_id,
         "limit_all_gathers": True,
         "cpu_offload": cpu_offload,
-    }
+        # "cpu_offload": torch.distributed.fsdp.CPUOffload(offload_params=True),
 
+        "use_orig_params": False,  # 改为 True 避免 flatten requires_grad 问题
+        # "sync_module_states": True,  # 初始化时自动同步权重
+        # "ignored_modules": [transformer.parallel_double_blocks],
+    }
     # Add LoRA-specific settings when LoRA is enabled
     if use_lora:
         fsdp_kwargs.update({

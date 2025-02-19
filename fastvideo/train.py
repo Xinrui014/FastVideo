@@ -7,6 +7,7 @@ import time
 from collections import deque
 
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
 import wandb
 from accelerate.utils import set_seed
@@ -20,7 +21,8 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
 from fastvideo.dataset.latent_datasets import (LatentDataset,
-                                               latent_collate_function)
+                                               LatentDataset_LR,
+                                               latent_collate_function, latent_collate_function_LR)
 from fastvideo.models.mochi_hf.mochi_latents_utils import normalize_dit_input
 from fastvideo.models.mochi_hf.pipeline_mochi import MochiPipeline
 from fastvideo.models.hunyuan_hf.pipeline_hunyuan import HunyuanVideoPipeline
@@ -28,7 +30,7 @@ from fastvideo.models.hunyuan_hf.pipeline_hunyuan import HunyuanVideoPipeline
 from fastvideo.utils.checkpoint import (resume_lora_optimizer, save_checkpoint,
                                         save_lora_checkpoint)
 from fastvideo.utils.communications import (broadcast,
-                                            sp_parallel_dataloader_wrapper)
+                                            sp_parallel_dataloader_wrapper, sp_parallel_dataloader_wrapper_LR)
 from fastvideo.utils.dataset_utils import LengthGroupedSampler
 from fastvideo.utils.fsdp_util import (apply_fsdp_checkpointing,
                                        get_dit_fsdp_kwargs)
@@ -116,6 +118,7 @@ def train_one_step(
     for _ in range(gradient_accumulation_steps):
         (
             latents,
+            lr_hidden_states,
             encoder_hidden_states,
             latents_attention_mask,
             encoder_attention_mask,
@@ -148,6 +151,7 @@ def train_one_step(
         with torch.autocast("cuda", dtype=torch.bfloat16):
             input_kwargs = {
                 "hidden_states": noisy_model_input,
+                "lr_hidden_states": lr_hidden_states,
                 "encoder_hidden_states": encoder_hidden_states,
                 "timestep": timesteps,
                 "encoder_attention_mask": encoder_attention_mask,  # B, L
@@ -185,9 +189,9 @@ def train_one_step(
 def main(args):
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    local_rank = int(os.environ["LOCAL_RANK"])
-    rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
     dist.init_process_group("nccl")
     torch.cuda.set_device(local_rank)
     device = torch.cuda.current_device()
@@ -217,6 +221,39 @@ def main(args):
         args.pretrained_model_name_or_path,
         torch.float32 if args.master_weight_type == "fp32" else torch.bfloat16,
     )
+    # Freeze all parameters
+    for param in transformer.parameters():
+        param.requires_grad = False
+
+    # Unfreeze only the parallel double blocks
+    for block in transformer.parallel_double_blocks:
+            for param in block.parameters():
+                param.requires_grad = True
+
+    # Freeze the text input module explicitly
+    for param in transformer.txt_in.parameters():
+        param.requires_grad = False
+
+    # print traiable parameters
+    # trainable_params = [name for name, param in transformer.named_parameters() if param.requires_grad]
+    # print(f"Total trainable parameters: {len(trainable_params)}")
+    # for name in trainable_params:
+    #     print(name)
+
+    # main_print("--> Freezing transformer parameters except for the last few layers")
+    # # Freeze all parameters first.
+    # for param in transformer.parameters():
+    #     param.requires_grad = False
+    #
+    # # Unfreeze only the last few transformer blocks.
+    # # You can set the number of blocks to unfreeze via a new command-line argument, e.g., --num_trainable_blocks
+    # num_trainable_blocks = 24
+    # for block in transformer.transformer_blocks[-num_trainable_blocks:]:
+    #     for param in block.parameters():
+    #         param.requires_grad = True
+    #---------------------------------------
+    # Add to train the last few layers
+    #---------------------------------------
 
     if args.use_lora:
         assert args.model_type != "hunyuan", "LoRA is only supported for huggingface model. Please use hunyuan_hf for lora finetuning"
@@ -261,6 +298,7 @@ def main(args):
         f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_startegy}"
     )
     fsdp_kwargs, no_split_modules = get_dit_fsdp_kwargs(
+        args,
         transformer,
         args.fsdp_sharding_startegy,
         args.use_lora,
@@ -280,6 +318,16 @@ def main(args):
         fsdp_kwargs["auto_wrap_policy"] = fsdp_kwargs["auto_wrap_policy"](
             transformer)
 
+    if args.model_type == "hunyuan_controlnet":
+        transformer._no_split_modules = [
+            no_split_module.__name__ for no_split_module in no_split_modules
+        ]
+        fsdp_kwargs["auto_wrap_policy"] = fsdp_kwargs["auto_wrap_policy"](
+            transformer)
+    # print(transformer)
+    print(f"Using auto_wrap_policy: {fsdp_kwargs['auto_wrap_policy']}")
+    print(f"No split modules: {no_split_modules}")
+
     transformer = FSDP(
         transformer,
         **fsdp_kwargs,
@@ -298,6 +346,12 @@ def main(args):
     params_to_optimize = transformer.parameters()
     params_to_optimize = list(
         filter(lambda p: p.requires_grad, params_to_optimize))
+    params_to_optimize = [
+        param
+        for block in transformer.parallel_double_blocks
+        for param in block.parameters()
+        if param.requires_grad
+    ]
 
     optimizer = torch.optim.AdamW(
         params_to_optimize,
@@ -323,7 +377,9 @@ def main(args):
         last_epoch=init_steps - 1,
     )
 
-    train_dataset = LatentDataset(args.data_json_path, args.num_latent_t,
+    # train_dataset = LatentDataset(args.data_json_path, args.num_latent_t,
+    #                               args.cfg)
+    train_dataset = LatentDataset_LR(args.data_json_path, args.num_latent_t,
                                   args.cfg)
     sampler = (LengthGroupedSampler(
         args.train_batch_size,
@@ -338,7 +394,7 @@ def main(args):
     train_dataloader = DataLoader(
         train_dataset,
         sampler=sampler,
-        collate_fn=latent_collate_function,
+        collate_fn=latent_collate_function_LR,
         pin_memory=True,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
@@ -392,7 +448,14 @@ def main(args):
         disable=local_rank > 0,
     )
 
-    loader = sp_parallel_dataloader_wrapper(
+    # loader = sp_parallel_dataloader_wrapper(
+    #     train_dataloader,
+    #     device,
+    #     args.train_batch_size,
+    #     args.sp_size,
+    #     args.train_sp_batch_size,
+    # )
+    loader = sp_parallel_dataloader_wrapper_LR(
         train_dataloader,
         device,
         args.train_batch_size,

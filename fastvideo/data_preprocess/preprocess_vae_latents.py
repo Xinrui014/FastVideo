@@ -82,7 +82,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataloader_num_workers",
         type=int,
-        default=1,
+        default=16,
         help=
         "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process.",
     )
