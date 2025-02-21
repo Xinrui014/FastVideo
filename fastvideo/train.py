@@ -229,6 +229,10 @@ def main(args):
     for block in transformer.parallel_double_blocks:
             for param in block.parameters():
                 param.requires_grad = True
+    for param in transformer.zero_conv.parameters():
+        param.requires_grad = True
+
+    print(f" Total training parameters = {sum(p.numel() for p in transformer.zero_conv.parameters() ) / 1e6} M")
 
     # Freeze the text input module explicitly
     for param in transformer.txt_in.parameters():
@@ -346,12 +350,11 @@ def main(args):
     params_to_optimize = transformer.parameters()
     params_to_optimize = list(
         filter(lambda p: p.requires_grad, params_to_optimize))
-    params_to_optimize = [
-        param
-        for block in transformer.parallel_double_blocks
-        for param in block.parameters()
-        if param.requires_grad
-    ]
+    params_to_optimize = []
+    for name, param in transformer.named_parameters():
+        if param.requires_grad:
+            params_to_optimize.append(param)
+            print(name)
 
     optimizer = torch.optim.AdamW(
         params_to_optimize,

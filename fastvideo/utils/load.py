@@ -272,6 +272,9 @@ def load_hunyuan_controlnet_state_dict(model, dit_model_name_or_path):
     for i in range(len(model.parallel_double_blocks)):
         model.parallel_double_blocks[i].load_state_dict(model.double_blocks[i].state_dict())
 
+        # for param in model.parallel_double_blocks[i].img_mlp.parameters():
+        #     param.data.zero_()
+
     print("Weights loaded successfully!")
     return model
 

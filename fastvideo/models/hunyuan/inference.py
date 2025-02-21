@@ -4,13 +4,14 @@ import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
 
 from fastvideo.models.hunyuan.constants import (NEGATIVE_PROMPT,
                                                 PRECISION_TO_TYPE,
                                                 PROMPT_TEMPLATE)
-from fastvideo.models.hunyuan.diffusion.pipelines import HunyuanVideoPipeline
+from fastvideo.models.hunyuan.diffusion.pipelines import HunyuanVideoPipeline, HunyuanVideoPipeline_LR
 from fastvideo.models.hunyuan.diffusion.schedulers import \
     FlowMatchDiscreteScheduler
 from fastvideo.models.hunyuan.modules import load_model
@@ -304,7 +305,7 @@ class HunyuanVideoSampler(Inference):
             parallel_args=parallel_args,
         )
 
-        self.pipeline = self.load_diffusion_pipeline(
+        self.pipeline= self.load_diffusion_pipeline(
             args=args,
             vae=self.vae,
             text_encoder=self.text_encoder,
@@ -338,7 +339,7 @@ class HunyuanVideoSampler(Inference):
             else:
                 raise ValueError(f"Invalid denoise type {args.denoise_type}")
 
-        pipeline = HunyuanVideoPipeline(
+        pipeline = HunyuanVideoPipeline_LR(
             vae=vae,
             text_encoder=text_encoder,
             text_encoder_2=text_encoder_2,
@@ -358,6 +359,7 @@ class HunyuanVideoSampler(Inference):
     def predict(
         self,
         prompt,
+        lr_latents=None,
         height=192,
         width=336,
         video_length=129,
@@ -505,31 +507,37 @@ class HunyuanVideoSampler(Inference):
         # ========================================================================
         # Pipeline inference
         # ========================================================================
+        samples_lr = [0]
         start_time = time.time()
-        samples_lr, latents = self.pipeline(
-            prompt=prompt,
-            height=target_height,
-            width=target_width,
-            video_length=target_video_length,
-            num_inference_steps=infer_steps,
-            guidance_scale=guidance_scale,
-            negative_prompt=negative_prompt,
-            num_videos_per_prompt=num_videos_per_prompt,
-            generator=generator,
-            output_type="pil",
-            n_tokens=n_tokens,
-            embedded_guidance_scale=embedded_guidance_scale,
-            data_type="video" if target_video_length > 1 else "image",
-            is_progress_bar=True,
-            vae_ver=self.args.vae,
-            enable_tiling=self.args.vae_tiling,
-            enable_vae_sp=self.args.vae_sp,
-        )
+        if lr_latents is None:
+            samples_lr, lr_latents = self.pipeline(
+                prompt=prompt,
+                height=target_height,
+                width=target_width,
+                video_length=target_video_length,
+                num_inference_steps=infer_steps,
+                guidance_scale=guidance_scale,
+                negative_prompt=negative_prompt,
+                num_videos_per_prompt=num_videos_per_prompt,
+                generator=generator,
+                output_type="pil",
+                n_tokens=n_tokens,
+                embedded_guidance_scale=embedded_guidance_scale,
+                data_type="video" if target_video_length > 1 else "image",
+                is_progress_bar=True,
+                vae_ver=self.args.vae,
+                enable_tiling=self.args.vae_tiling,
+                enable_vae_sp=self.args.vae_sp,
+            )
+            b, s, c, h, w = lr_latents.shape
+            lr_latents_reshaped = lr_latents.view(b * s, c, h, w)
+            lr_latents_resized = F.interpolate(lr_latents_reshaped, size=(136, 240), mode='bilinear', align_corners=False)
+            lr_latents = lr_latents_resized.view(b, s, c, 136, 240)
 
         samples, latents = self.pipeline(
             prompt=prompt,
-            lr_fea=latents,
-            latents=0.6,
+            lr_fea=lr_latents,
+            strength=0.6,
             height=1088,
             width=1920,
             video_length=target_video_length,

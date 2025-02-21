@@ -1046,3 +1046,438 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             return image
 
         return HunyuanVideoPipelineOutput(videos=image), latents
+
+
+class HunyuanVideoPipeline_LR(HunyuanVideoPipeline):
+    # def __init__(self, **kwargs):
+    #     super(HunyuanVideoPipeline_LR, self).__init__(**kwargs)
+    #
+    #     self.register_to_config(kwargs=kwargs)
+    def __init__(
+            self,
+            vae: AutoencoderKL,
+            text_encoder: TextEncoder,
+            transformer: HYVideoDiffusionTransformer,
+            scheduler: KarrasDiffusionSchedulers,
+            text_encoder_2: Optional[TextEncoder] = None,
+            progress_bar_config: Dict[str, Any] = None,
+            args=None,
+    ):
+        # 调用父类初始化
+        super().__init__(vae=vae, text_encoder=text_encoder, transformer=transformer, scheduler=scheduler,
+                         text_encoder_2=text_encoder_2, progress_bar_config=progress_bar_config, args=args)
+        # 如果需要，可以注册 kwargs 到配置中
+
+    @torch.no_grad()
+    # @replace_example_docstring(EXAMPLE_DOC_STRING)
+    def __call__(
+            self,
+            prompt: Union[str, List[str]],
+            lr_fea: Optional[torch.Tensor] = None,
+            strength: float = 1.0,
+            height: int = 720,
+            width: int = 1280,
+            video_length: int = 93,
+            data_type: str = "video",
+            num_inference_steps: int = 50,
+            timesteps: List[int] = None,
+            sigmas: List[float] = None,
+            guidance_scale: float = 7.5,
+            negative_prompt: Optional[Union[str, List[str]]] = None,
+            num_videos_per_prompt: Optional[int] = 1,
+            eta: float = 0.0,
+            generator: Optional[Union[torch.Generator,
+            List[torch.Generator]]] = None,
+            latents: Optional[torch.Tensor] = None,
+            prompt_embeds: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            negative_prompt_embeds: Optional[torch.Tensor] = None,
+            negative_attention_mask: Optional[torch.Tensor] = None,
+            output_type: Optional[str] = "pil",
+            return_dict: bool = True,
+            cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+            guidance_rescale: float = 0.0,
+            clip_skip: Optional[int] = None,
+            callback_on_step_end: Optional[Union[Callable[[int, int, Dict],
+            None], PipelineCallback,
+            MultiPipelineCallbacks,]] = None,
+            callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+            vae_ver: str = "88-4c-sd",
+            enable_tiling: bool = False,
+            enable_vae_sp: bool = False,
+            n_tokens: Optional[int] = None,
+            embedded_guidance_scale: Optional[float] = None,
+            **kwargs,
+    ):
+        callback = kwargs.pop("callback", None)
+        callback_steps = kwargs.pop("callback_steps", None)
+
+        if callback is not None:
+            deprecate(
+                "callback",
+                "1.0.0",
+                "Passing `callback` as an input argument to `__call__` is deprecated, consider using `callback_on_step_end`",
+            )
+        if callback_steps is not None:
+            deprecate(
+                "callback_steps",
+                "1.0.0",
+                "Passing `callback_steps` as an input argument to `__call__` is deprecated, consider using `callback_on_step_end`",
+            )
+
+        if isinstance(callback_on_step_end,
+                      (PipelineCallback, MultiPipelineCallbacks)):
+            callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
+
+        # 0. Default height and width to unet
+        # height = height or self.transformer.config.sample_size * self.vae_scale_factor
+        # width = width or self.transformer.config.sample_size * self.vae_scale_factor
+        # to deal with lora scaling and other possible forward hooks
+
+        # 1. Check inputs. Raise error if not correct
+        self.check_inputs(
+            prompt,
+            height,
+            width,
+            video_length,
+            callback_steps,
+            negative_prompt,
+            prompt_embeds,
+            negative_prompt_embeds,
+            callback_on_step_end_tensor_inputs,
+            vae_ver=vae_ver,
+        )
+
+        self._guidance_scale = guidance_scale
+        self._guidance_rescale = guidance_rescale
+        self._clip_skip = clip_skip
+        self._cross_attention_kwargs = cross_attention_kwargs
+        self._interrupt = False
+
+        # 2. Define call parameters
+        if prompt is not None and isinstance(prompt, str):
+            batch_size = 1
+        elif prompt is not None and isinstance(prompt, list):
+            batch_size = len(prompt)
+        else:
+            batch_size = prompt_embeds.shape[0]
+
+        device = (torch.device(f"cuda:{dist.get_rank()}")
+                  if dist.is_initialized() else self._execution_device)
+
+        # 3. Encode input prompt
+        lora_scale = (self.cross_attention_kwargs.get("scale", None)
+                      if self.cross_attention_kwargs is not None else None)
+
+        (
+            prompt_embeds,
+            negative_prompt_embeds,
+            prompt_mask,
+            negative_prompt_mask,
+        ) = self.encode_prompt(
+            prompt,
+            device,
+            num_videos_per_prompt,
+            self.do_classifier_free_guidance,
+            negative_prompt,
+            prompt_embeds=prompt_embeds,
+            attention_mask=attention_mask,
+            negative_prompt_embeds=negative_prompt_embeds,
+            negative_attention_mask=negative_attention_mask,
+            lora_scale=lora_scale,
+            clip_skip=self.clip_skip,
+            data_type=data_type,
+        )
+        if self.text_encoder_2 is not None:
+            (
+                prompt_embeds_2,
+                negative_prompt_embeds_2,
+                prompt_mask_2,
+                negative_prompt_mask_2,
+            ) = self.encode_prompt(
+                prompt,
+                device,
+                num_videos_per_prompt,
+                self.do_classifier_free_guidance,
+                negative_prompt,
+                prompt_embeds=None,
+                attention_mask=None,
+                negative_prompt_embeds=None,
+                negative_attention_mask=None,
+                lora_scale=lora_scale,
+                clip_skip=self.clip_skip,
+                text_encoder=self.text_encoder_2,
+                data_type=data_type,
+            )
+        else:
+            prompt_embeds_2 = None
+            negative_prompt_embeds_2 = None
+            prompt_mask_2 = None
+            negative_prompt_mask_2 = None
+
+        # For classifier free guidance, we need to do two forward passes.
+        # Here we concatenate the unconditional and text embeddings into a single batch
+        # to avoid doing two forward passes
+        if self.do_classifier_free_guidance:
+            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
+            if prompt_mask is not None:
+                prompt_mask = torch.cat([negative_prompt_mask, prompt_mask])
+            if prompt_embeds_2 is not None:
+                prompt_embeds_2 = torch.cat(
+                    [negative_prompt_embeds_2, prompt_embeds_2])
+            if prompt_mask_2 is not None:
+                prompt_mask_2 = torch.cat(
+                    [negative_prompt_mask_2, prompt_mask_2])
+
+        # 4. Prepare timesteps
+        extra_set_timesteps_kwargs = self.prepare_extra_func_kwargs(
+            self.scheduler.set_timesteps, {"n_tokens": n_tokens})
+        timesteps, num_inference_steps = retrieve_timesteps(
+            self.scheduler,
+            num_inference_steps,
+            device,
+            timesteps,
+            sigmas,
+            **extra_set_timesteps_kwargs,
+        )
+
+        # add timesteps with strength
+        # timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, timesteps, strength, device)
+        # latent_timestep = timesteps[:1].repeat(batch_size)
+
+        if "884" in vae_ver:
+            video_length = (video_length - 1) // 4 + 1
+        elif "888" in vae_ver:
+            video_length = (video_length - 1) // 8 + 1
+        else:
+            video_length = video_length
+
+        # 5. Prepare latent variables
+        num_channels_latents = self.transformer.config.in_channels
+
+
+        latents = self.prepare_latents(
+            batch_size * num_videos_per_prompt,
+            num_channels_latents,
+            height,
+            width,
+            video_length,
+            prompt_embeds.dtype,
+            device,
+            generator,
+            latents,
+        )
+
+        world_size, rank = nccl_info.sp_size, nccl_info.rank_within_group
+        if get_sequence_parallel_state():
+            latents = rearrange(latents,
+                                "b t (n s) h w -> b t n s h w",
+                                n=world_size).contiguous()
+            latents = latents[:, :, rank, :, :, :]
+            if lr_fea is not None:
+                lr_fea = rearrange(lr_fea,
+                                    "b t (n s) h w -> b t n s h w",
+                                    n=world_size).contiguous()
+                lr_fea = lr_fea[:, :, rank, :, :, :]
+
+
+        # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
+        extra_step_kwargs = self.prepare_extra_func_kwargs(
+            self.scheduler.step,
+            {
+                "generator": generator,
+                "eta": eta
+            },
+        )
+
+        target_dtype = PRECISION_TO_TYPE[self.args.precision]
+        autocast_enabled = (target_dtype !=
+                            torch.float32) and not self.args.disable_autocast
+        vae_dtype = PRECISION_TO_TYPE[self.args.vae_precision]
+        vae_autocast_enabled = (
+                                       vae_dtype != torch.float32) and not self.args.disable_autocast
+
+        # 7. Denoising loop
+        num_warmup_steps = len(
+            timesteps) - num_inference_steps * self.scheduler.order
+        self._num_timesteps = len(timesteps)
+
+        # if is_progress_bar:
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
+            for i, t in enumerate(timesteps):
+                if self.interrupt:
+                    continue
+
+                # expand the latents if we are doing classifier free guidance
+                # latent_model_input = (torch.cat(
+                #     [latents] *
+                #     2) if self.do_classifier_free_guidance else latents)
+
+                if lr_fea is not None:
+                    if self.do_classifier_free_guidance:
+                        latent_model_input = torch.cat([latents] * 2)
+                        unconditional_lr_fea = torch.zeros_like(lr_fea)
+                        lr_fea_input = torch.cat([unconditional_lr_fea, lr_fea], dim=0)
+                    else:
+                        latent_model_input = latents
+                        lr_fea_input = lr_fea
+                else:
+                    latent_model_input = (torch.cat(
+                        [latents] *
+                        2) if self.do_classifier_free_guidance else latents)
+
+
+                latent_model_input = self.scheduler.scale_model_input(
+                    latent_model_input, t)
+
+                print(latent_model_input.shape)
+
+                t_expand = t.repeat(latent_model_input.shape[0])
+                guidance_expand = (torch.tensor(
+                    [embedded_guidance_scale] * latent_model_input.shape[0],
+                    dtype=torch.float32,
+                    device=device,
+                ).to(target_dtype) * 1000.0 if embedded_guidance_scale
+                                               is not None else None)
+                # predict the noise residual
+                with torch.autocast(device_type="cuda",
+                                    dtype=target_dtype,
+                                    enabled=autocast_enabled):
+                    # concat prompt_embeds_2 and prompt_embeds. Mismatch fill with zeros
+                    if prompt_embeds_2.shape[-1] != prompt_embeds.shape[-1]:
+                        prompt_embeds_2 = F.pad(
+                            prompt_embeds_2,
+                            (0, prompt_embeds.shape[2] -
+                             prompt_embeds_2.shape[1]),
+                            value=0,
+                        ).unsqueeze(1)
+                    encoder_hidden_states = torch.cat(
+                        [prompt_embeds_2, prompt_embeds], dim=1)
+                    noise_pred = self.transformer(  # For an input image (129, 192, 336) (1, 256, 256)
+                        latent_model_input,  # [2, 16, 33, 24, 42]
+                        lr_fea,
+                        encoder_hidden_states,
+                        t_expand,  # [2]
+                        prompt_mask,  # [2, 256]fpdb
+                        guidance=guidance_expand,
+                        return_dict=False,
+                    )[0]
+
+                # perform guidance
+                if self.do_classifier_free_guidance:
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + self.guidance_scale * (
+                            noise_pred_text - noise_pred_uncond)
+
+                if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
+                    # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                    noise_pred = rescale_noise_cfg(
+                        noise_pred,
+                        noise_pred_text,
+                        guidance_rescale=self.guidance_rescale,
+                    )
+
+                # compute the previous noisy sample x_t -> x_t-1
+                latents = self.scheduler.step(noise_pred,
+                                              t,
+                                              latents,
+                                              **extra_step_kwargs,
+                                              return_dict=False)[0]
+
+                if callback_on_step_end is not None:
+                    callback_kwargs = {}
+                    for k in callback_on_step_end_tensor_inputs:
+                        callback_kwargs[k] = locals()[k]
+                    callback_outputs = callback_on_step_end(
+                        self, i, t, callback_kwargs)
+
+                    latents = callback_outputs.pop("latents", latents)
+                    prompt_embeds = callback_outputs.pop(
+                        "prompt_embeds", prompt_embeds)
+                    negative_prompt_embeds = callback_outputs.pop(
+                        "negative_prompt_embeds", negative_prompt_embeds)
+
+                # call the callback, if provided
+                if i == len(timesteps) - 1 or (
+                        (i + 1) > num_warmup_steps and
+                        (i + 1) % self.scheduler.order == 0):
+                    if progress_bar is not None:
+                        progress_bar.update()
+                    if callback is not None and i % callback_steps == 0:
+                        step_idx = i // getattr(self.scheduler, "order", 1)
+                        callback(step_idx, t, latents)
+
+        if get_sequence_parallel_state():
+            latents = all_gather(latents, dim=2)
+
+        if not output_type == "latent":
+            expand_temporal_dim = False
+            if len(latents.shape) == 4:
+                if isinstance(self.vae, AutoencoderKLCausal3D):
+                    latents = latents.unsqueeze(2)
+                    expand_temporal_dim = True
+            elif len(latents.shape) == 5:
+                pass
+            else:
+                raise ValueError(
+                    f"Only support latents with shape (b, c, h, w) or (b, c, f, h, w), but got {latents.shape}."
+                )
+
+            if (hasattr(self.vae.config, "shift_factor")
+                    and self.vae.config.shift_factor):
+                latents = (latents / self.vae.config.scaling_factor +
+                           self.vae.config.shift_factor)
+            else:
+                latents = latents / self.vae.config.scaling_factor
+
+            with torch.autocast(device_type="cuda",
+                                dtype=vae_dtype,
+                                enabled=vae_autocast_enabled):
+                if enable_tiling:
+                    self.vae.enable_tiling()
+                if enable_vae_sp:
+                    self.vae.enable_parallel()
+                image = self.vae.decode(latents,
+                                        return_dict=False,
+                                        generator=generator)[0]
+
+                # resize image from 720p to 1088x1920
+                # encode 1088x1920 video to latent space
+                if lr_fea is None:
+                    b, s, c, h, w = image.shape
+                    lr_image_reshaped = image.view(b * s, c, h, w)
+                    lr_image_resized = F.interpolate(lr_image_reshaped, size=(1088, 1920), mode='bicubic', align_corners=False)
+                    lr_image = lr_image_resized.view(b, s, c, 1088, 1920)
+                    lr_latents = self.vae.encode(lr_image,
+                                                 return_dict=False)[0]
+
+
+            if expand_temporal_dim or image.shape[2] == 1:
+                image = image.squeeze(2)
+
+        else:
+            image = latents
+
+        image = (image / 2 + 0.5).clamp(0, 1)
+
+        # resize image from 720p to 1088x1920
+        # encode 1088x1920 video to latent space
+
+
+
+
+
+
+
+        # we always cast to float32 as this does not cause significant overhead and is compatible with bfloa16
+        image = image.cpu().float()
+
+        # Offload all models
+        self.maybe_free_model_hooks()
+
+        if not return_dict:
+            return image
+
+        return HunyuanVideoPipelineOutput(videos=image), latents
+
+

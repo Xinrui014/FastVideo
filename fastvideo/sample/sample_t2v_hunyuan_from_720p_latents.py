@@ -8,6 +8,10 @@ import torch
 import torch.distributed as dist
 import torchvision
 from einops import rearrange
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from fastvideo.utils.dataset_utils import LengthGroupedSampler
+from fastvideo.dataset.latent_datasets import LatentDataset_LR, latent_collate_function_LR
 
 from fastvideo.models.hunyuan.inference import HunyuanVideoSampler
 from fastvideo.utils.parallel_states import (
@@ -27,6 +31,7 @@ def initialize_distributed():
 
 
 def main(args):
+    torch.backends.cuda.matmul.allow_tf32 = True
     initialize_distributed()
     print(nccl_info.sp_size)
 
@@ -49,9 +54,41 @@ def main(args):
     with open(args.prompt) as f:
         prompts = f.readlines()
 
-    for prompt in prompts:
+
+    # add lr_latents:
+    train_dataset = LatentDataset_LR("/data/atlas/projects/FastVideo/data/Inte4K/videos2caption.json",
+                                     16,0.0)
+
+    sampler = (LengthGroupedSampler(
+        args.train_batch_size,
+        rank=0,
+        world_size=1,
+        lengths=train_dataset.lengths,
+        group_frame=args.group_frame,
+        group_resolution=args.group_resolution,
+    ) if (args.group_frame or args.group_resolution) else DistributedSampler(
+        train_dataset, rank=0, num_replicas=1, shuffle=False))
+
+    train_dataloader = DataLoader(
+        train_dataset,
+        sampler=sampler,
+        collate_fn=latent_collate_function_LR,
+        pin_memory=True,
+        batch_size=1,
+        num_workers=8,
+        drop_last=True,
+        shuffle=False,
+    )
+
+
+
+    for i, batch in enumerate(train_dataloader):
+        latent, lr_latents, prompt_embed, prompt_attention_mask, _ = batch
+        lr_latents = lr_latents.to("cuda")
+        prompt = prompts[i]
         outputs = hunyuan_video_sampler.predict(
             prompt=prompt,
+            lr_latents=lr_latents,
             height=args.height,
             width=args.width,
             video_length=args.num_frames,
@@ -86,25 +123,29 @@ def main(args):
             frame_grid = frame_grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
             high_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
 
-        # Process low-resolution samples
-        low_res_video = outputs["samples_lr"]
-        low_res_frames = []
-        frames_low = rearrange(low_res_video, "b c t h w -> t b c h w")
-        for frame in frames_low:
-            frame_grid = torchvision.utils.make_grid(frame, nrow=6)
-            frame_grid = frame_grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
-            low_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
-
         # Make sure output directory exists
         os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
 
         # Save the high-resolution video
-        high_res_filename = os.path.join(args.output_path, f"{prompt[:100]}_high_res.mp4")
+        high_res_filename = os.path.join(args.output_path, f"{prompt[:20]}_high_res.mp4")
         imageio.mimsave(high_res_filename, high_res_frames, fps=args.fps)
 
-        # Save the low-resolution video
-        low_res_filename = os.path.join(args.output_path, f"{prompt[:100]}_low_res.mp4")
-        imageio.mimsave(low_res_filename, low_res_frames, fps=args.fps)
+        if outputs["samples_lr"] != 0:
+            # Process low-resolution samples
+            low_res_video = outputs["samples_lr"]
+            low_res_frames = []
+            frames_low = rearrange(low_res_video, "b c t h w -> t b c h w")
+            for frame in frames_low:
+                frame_grid = torchvision.utils.make_grid(frame, nrow=6)
+                frame_grid = frame_grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+                low_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
+
+            # Save the low-resolution video
+            low_res_filename = os.path.join(args.output_path, f"{prompt[:20]}_low_res.mp4")
+            imageio.mimsave(low_res_filename, low_res_frames, fps=args.fps)
+
+        if i == 2:
+            break
 
 
 if __name__ == "__main__":
@@ -272,6 +313,9 @@ if __name__ == "__main__":
     parser.add_argument("--text-states-dim-2", type=int, default=768)
     parser.add_argument("--tokenizer-2", type=str, default="clipL")
     parser.add_argument("--text-len-2", type=int, default=77)
+
+    parser.add_argument("--group_frame", action="store_true")  # TODO
+    parser.add_argument("--group_resolution", action="store_true")  # TODO
 
     args = parser.parse_args()
     # process for vae sequence parallel

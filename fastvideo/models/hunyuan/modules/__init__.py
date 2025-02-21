@@ -1,4 +1,5 @@
 from .models import HUNYUAN_VIDEO_CONFIG, HYVideoDiffusionTransformer
+from .models_controlnet import HYVideoDiffusionTransformerControlNet
 
 
 def load_model(args, in_channels, out_channels, factor_kwargs):
@@ -14,12 +15,21 @@ def load_model(args, in_channels, out_channels, factor_kwargs):
         model (nn.Module): The hunyuan video model
     """
     if args.model in HUNYUAN_VIDEO_CONFIG.keys():
-        model = HYVideoDiffusionTransformer(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            **HUNYUAN_VIDEO_CONFIG[args.model],
-            **factor_kwargs,
-        )
+        if args.model_type == 'hunyuan_controlnet':
+            model = HYVideoDiffusionTransformerControlNet(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                **HUNYUAN_VIDEO_CONFIG[args.model],
+                **factor_kwargs,
+            )
+        else:
+            model = HYVideoDiffusionTransformer(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                **HUNYUAN_VIDEO_CONFIG[args.model],
+                **factor_kwargs,
+            )
         return model
+
     else:
         raise NotImplementedError()

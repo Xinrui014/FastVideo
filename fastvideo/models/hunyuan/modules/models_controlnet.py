@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+from einops import rearrange
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models import ModelMixin
 from einops import rearrange
@@ -789,14 +790,14 @@ class HYVideoDiffusionTransformerControlNet(HYVideoDiffusionTransformer):
                 qk_norm_type=self.config.qk_norm_type,
                 qkv_bias=self.config.qkv_bias,
                 **{"device": self.device, "dtype": self.dtype},
-            ) for _ in range(5)
+            ) for _ in range(10)
         ])
 
         for param in self.txt_in.parameters():
             param.requires_grad = False
 
         # Zero Convolution layer like in ControlNet (1x1 conv with zero init)
-        self.zero_conv = nn.Conv2d(self.out_channels, self.out_channels, kernel_size=1, padding=0)
+        self.zero_conv = nn.Conv3d(self.hidden_size, self.hidden_size, kernel_size=1, padding=0)
         nn.init.zeros_(self.zero_conv.weight)
         nn.init.zeros_(self.zero_conv.bias)
 
@@ -824,7 +825,7 @@ class HYVideoDiffusionTransformerControlNet(HYVideoDiffusionTransformer):
         txt = encoder_hidden_states[:, 1:]
         text_states_2 = encoder_hidden_states[:, 0, :self.config.
         text_states_dim_2]
-        _, _, ot, oh, ow = x.shape  # codespell:ignore
+        B, _, ot, oh, ow = x.shape  # codespell:ignore
         tt, th, tw = (
             ot // self.patch_size[0],  # codespell:ignore
             oh // self.patch_size[1],  # codespell:ignore
@@ -850,7 +851,9 @@ class HYVideoDiffusionTransformerControlNet(HYVideoDiffusionTransformer):
 
         # Embed image and text.
         img = self.img_in(img)
-        lr_latent = self.img_in(lr_latent)
+        if lr_latent is not None:
+            lr_latent = self.img_in(lr_latent)
+
         if self.text_projection == "linear":
             txt = self.txt_in(txt)
         elif self.text_projection == "single_refiner":
@@ -870,31 +873,42 @@ class HYVideoDiffusionTransformerControlNet(HYVideoDiffusionTransformer):
         #
         #     img, txt = block(*double_block_args)
 
-        # ---------------------Pass through DiT controlnet blocks --------------------
-        num_fixed = len(self.double_blocks)  # 固定块数量（20个）
-        num_parallel = len(self.parallel_double_blocks)  # adapter数量（比如5个）
+        if lr_latent is not None:
 
-        # 初始化 control branch 的输入
-        control_input = lr_latent + img
+            # ---------------------Pass through DiT controlnet blocks --------------------
+            num_fixed = len(self.double_blocks)  # 固定块数量（20个）
+            num_parallel = len(self.parallel_double_blocks)  # adapter数量（比如5个）
 
-        for i in range(num_fixed):
-            # 固定分支输出
-            fixed_img, fixed_txt = self.double_blocks[i](img, txt, vec, freqs_cis, text_mask)
+            # 初始化 control branch 的输入
+            control_input = lr_latent + img
 
-            # 如果当前层存在对应的 control branch
-            if i < num_parallel:
-                # control branch 只接收来自自身的输入 control_input
-                control_img, control_txt = self.parallel_double_blocks[i](
-                    control_input, txt, vec, freqs_cis, text_mask
-                )
-                # 将 control branch 输出加到 freeze 层的输出上
-                img = fixed_img + control_img
-                txt = fixed_txt + control_txt
+            for i in range(num_fixed):
+                # 固定分支输出
+                fixed_img, fixed_txt = self.double_blocks[i](img, txt, vec, freqs_cis, text_mask)
 
-                # 更新 control branch 的输入，以便后续层只接收来自 control branch 的信息
-                control_input = control_img
-            else:
-                img, txt = fixed_img, fixed_txt
+                # 如果当前层存在对应的 control branch
+                if i < num_parallel:
+                    # control branch 只接收来自自身的输入 control_input
+                    control_img, control_txt = self.parallel_double_blocks[i](
+                        control_input, txt, vec, freqs_cis, text_mask
+                    )
+
+                    control_img_image_space = rearrange(control_img, 'b (ot oh ow) hidden -> b hidden ot oh ow', ot=ot//self.patch_size[0], oh=oh//self.patch_size[1], ow=ow//self.patch_size[2])
+                    control_img_image_space = self.zero_conv(control_img_image_space)
+                    control_img_0 = control_img_image_space.flatten(2).transpose(1, 2)
+
+                    # 将 control branch 输出加到 freeze 层的输出上
+                    img = fixed_img + control_img_0
+                    txt = control_txt
+
+                    # 更新 control branch 的输入，以便后续层只接收来自 control branch 的信息
+                    control_input = control_img
+                else:
+                    img, txt = fixed_img, fixed_txt
+        else:
+            for i in range(len(self.double_blocks)):
+                # 固定分支输出
+                img, txt = self.double_blocks[i](img, txt, vec, freqs_cis, text_mask)
 
         # Merge txt and img to pass through single stream blocks.
         x = torch.cat((img, txt), 1)
