@@ -20,35 +20,10 @@ from .norm_layers import get_norm_layer
 from .posemb_layers import apply_rotary_emb
 from .token_refiner import SingleTokenRefiner
 
-
-# add upsampler
-# class TimestepBlock(nn.Module):
-#     """
-#     Any module where forward() takes timestep embeddings as a second argument.
-#     """
-#
-#     @abstractmethod
-#     def forward(self, x, emb):
-#         """
-#         Apply the module to `x` given `emb` timestep embeddings.
-#         """
-#
-# class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
-#     """
-#     A sequential module that passes timestep embeddings to the children that
-#     support it as an extra input.
-#     """
-#
-#     def forward(self, x, emb, context=None):
-#         for layer in self:
-#             if isinstance(layer, TimestepBlock):
-#                 x = layer(x, emb)
-#             elif isinstance(layer, SpatialTransformer):
-#                 x = layer(x, context)
-#             else:
-#                 x = layer(x)
-#         return x
-
+def zero_module(module):
+    for p in module.parameters():
+        nn.init.zeros_(p)
+    return module
 
 class MMDoubleStreamBlock(nn.Module):
     """
@@ -797,9 +772,15 @@ class HYVideoDiffusionTransformerControlNet(HYVideoDiffusionTransformer):
             param.requires_grad = False
 
         # Zero Convolution layer like in ControlNet (1x1 conv with zero init)
-        self.zero_conv = nn.Conv3d(self.hidden_size, self.hidden_size, kernel_size=1, padding=0)
-        nn.init.zeros_(self.zero_conv.weight)
-        nn.init.zeros_(self.zero_conv.bias)
+        self.zero_convs = nn.ModuleList([
+            nn.Conv3d(self.hidden_size, self.hidden_size, kernel_size=1, padding=0)
+            for _ in range(len(self.parallel_double_blocks))
+        ])
+        for zero_conv in self.zero_convs:
+            nn.init.zeros_(zero_conv.weight)
+            nn.init.zeros_(zero_conv.bias)
+
+        self.input_block = zero_module(nn.Linear(self.hidden_size, self.hidden_size))
 
     def forward(
             self,
@@ -879,8 +860,18 @@ class HYVideoDiffusionTransformerControlNet(HYVideoDiffusionTransformer):
             num_fixed = len(self.double_blocks)  # 固定块数量（20个）
             num_parallel = len(self.parallel_double_blocks)  # adapter数量（比如5个）
 
+            # a = self.input_block(lr_latent)
+            #
+            # if torch.allclose(a, torch.zeros_like(a), atol=1e-6):
+            #     print("All elements in 'a' are zero (within tolerance).")
+            # else:
+            #     print("Not all elements in 'a' are zero.")
+            #
+            # s = a.sum()
+            # print(s)
+
             # 初始化 control branch 的输入
-            control_input = lr_latent + img
+            control_input = self.input_block(lr_latent) + img
 
             for i in range(num_fixed):
                 # 固定分支输出
@@ -894,7 +885,7 @@ class HYVideoDiffusionTransformerControlNet(HYVideoDiffusionTransformer):
                     )
 
                     control_img_image_space = rearrange(control_img, 'b (ot oh ow) hidden -> b hidden ot oh ow', ot=ot//self.patch_size[0], oh=oh//self.patch_size[1], ow=ow//self.patch_size[2])
-                    control_img_image_space = self.zero_conv(control_img_image_space)
+                    control_img_image_space = self.zero_convs[i](control_img_image_space)
                     control_img_0 = control_img_image_space.flatten(2).transpose(1, 2)
 
                     # 将 control branch 输出加到 freeze 层的输出上

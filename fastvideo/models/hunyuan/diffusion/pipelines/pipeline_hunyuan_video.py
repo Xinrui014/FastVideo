@@ -1316,8 +1316,9 @@ class HunyuanVideoPipeline_LR(HunyuanVideoPipeline):
                 if lr_fea is not None:
                     if self.do_classifier_free_guidance:
                         latent_model_input = torch.cat([latents] * 2)
-                        unconditional_lr_fea = torch.zeros_like(lr_fea)
-                        lr_fea_input = torch.cat([unconditional_lr_fea, lr_fea], dim=0)
+                        lr_fea_input = torch.cat([lr_fea] * 2)
+                        # unconditional_lr_fea = torch.zeros_like(lr_fea)
+                        # lr_fea_input = torch.cat([unconditional_lr_fea, lr_fea], dim=0)
                     else:
                         latent_model_input = latents
                         lr_fea_input = lr_fea
@@ -1355,7 +1356,7 @@ class HunyuanVideoPipeline_LR(HunyuanVideoPipeline):
                         [prompt_embeds_2, prompt_embeds], dim=1)
                     noise_pred = self.transformer(  # For an input image (129, 192, 336) (1, 256, 256)
                         latent_model_input,  # [2, 16, 33, 24, 42]
-                        lr_fea,
+                        lr_fea_input,
                         encoder_hidden_states,
                         t_expand,  # [2]
                         prompt_mask,  # [2, 256]fpdb

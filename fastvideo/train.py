@@ -229,10 +229,12 @@ def main(args):
     for block in transformer.parallel_double_blocks:
             for param in block.parameters():
                 param.requires_grad = True
-    for param in transformer.zero_conv.parameters():
+    for param in transformer.zero_convs.parameters():
+        param.requires_grad = True
+    for param in transformer.input_block.parameters():
         param.requires_grad = True
 
-    print(f" Total training parameters = {sum(p.numel() for p in transformer.zero_conv.parameters() ) / 1e6} M")
+    print(f" Total training parameters = {sum(p.numel() for p in transformer.zero_convs.parameters() ) / 1e6} M")
 
     # Freeze the text input module explicitly
     for param in transformer.txt_in.parameters():
@@ -443,6 +445,8 @@ def main(args):
             "resume_from_checkpoint is not supported now.")
         # TODO
 
+
+
     progress_bar = tqdm(
         range(0, args.max_train_steps),
         initial=init_steps,
@@ -519,7 +523,7 @@ def main(args):
                                      args.output_dir, step, pipe)
             else:
                 # Your existing checkpoint saving code
-                save_checkpoint(transformer, rank, args.output_dir, step)
+                save_checkpoint(transformer, optimizer, lr_scheduler, rank, args.output_dir, step)
             dist.barrier()
         if args.log_validation and step % args.validation_steps == 0:
             log_validation(args,
@@ -533,7 +537,7 @@ def main(args):
         save_lora_checkpoint(transformer, optimizer, rank, args.output_dir,
                              args.max_train_steps, pipe)
     else:
-        save_checkpoint(transformer, rank, args.output_dir,
+        save_checkpoint(transformer, optimizer, lr_scheduler, rank, args.output_dir,
                         args.max_train_steps)
 
     if get_sequence_parallel_state():

@@ -20,6 +20,35 @@ from .posemb_layers import apply_rotary_emb
 from .token_refiner import SingleTokenRefiner
 
 
+# add upsampler
+# class TimestepBlock(nn.Module):
+#     """
+#     Any module where forward() takes timestep embeddings as a second argument.
+#     """
+#
+#     @abstractmethod
+#     def forward(self, x, emb):
+#         """
+#         Apply the module to `x` given `emb` timestep embeddings.
+#         """
+#
+# class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
+#     """
+#     A sequential module that passes timestep embeddings to the children that
+#     support it as an extra input.
+#     """
+#
+#     def forward(self, x, emb, context=None):
+#         for layer in self:
+#             if isinstance(layer, TimestepBlock):
+#                 x = layer(x, emb)
+#             elif isinstance(layer, SpatialTransformer):
+#                 x = layer(x, context)
+#             else:
+#                 x = layer(x)
+#         return x
+
+
 class MMDoubleStreamBlock(nn.Module):
     """
     A multimodal dit block with separate modulation for
