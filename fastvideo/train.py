@@ -5,6 +5,7 @@ import math
 import os
 import time
 from collections import deque
+import datetime
 
 import torch
 import torch.nn.functional as F
@@ -207,7 +208,7 @@ def main(args):
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     rank = int(os.environ.get("RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
-    dist.init_process_group("nccl")
+    dist.init_process_group("nccl", timeout=datetime.timedelta(seconds=5400))
     torch.cuda.set_device(local_rank)
     device = torch.cuda.current_device()
     initialize_sequence_parallel_state(args.sp_size)
@@ -532,6 +533,7 @@ def main(args):
                 step=step,
             )
         if step % args.checkpointing_steps == 0:
+            dist.barrier()
             if args.use_lora:
                 # Save LoRA weights
                 save_lora_checkpoint(transformer, optimizer, rank,

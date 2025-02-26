@@ -29,7 +29,7 @@ export WANDB_API_KEY="a5ebf533c17c677bcee36f66c91907b5fb102f7c"
 
 
 srun -N 8 -n 8 \
-    fastvideo/train.py \
+    python /scratch/10320/lanqing001/xinrui/FastVideo/fastvideo/train.py \
     --seed 42 \
     --pretrained_model_name_or_path /scratch/10320/lanqing001/xinrui/FastVideo/data/hunyuan \
     --dit_model_name_or_path /scratch/10320/lanqing001/xinrui/FastVideo/data/hunyuan/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt\
@@ -58,7 +58,7 @@ srun -N 8 -n 8 \
     --ema_decay 0.999 \
     --log_validation \
     --output_dir=/scratch/10320/lanqing001/xinrui/FastVideo/data/outputs/ZeroInit2_blocks_10_gpus_8_bs_2 \
-    --tracker_project_name Hunyuan_ControlNet_Finetune_ZeroInit2 \
+    --tracker_project_name GH200_Hunyuan_ControlNet_Finetune_ZeroInit2 \
     --num_frames 45 \
     --num_height 1088 \
     --num_width 1920 \

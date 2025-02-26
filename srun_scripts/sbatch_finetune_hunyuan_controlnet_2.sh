@@ -29,7 +29,7 @@ export WANDB_API_KEY="a5ebf533c17c677bcee36f66c91907b5fb102f7c"
 
 
 srun -N 2 -n 2 \
-    fastvideo/train.py \
+    python /scratch/10320/lanqing001/xinrui/FastVideo/fastvideo/train.py \
     --seed 42 \
     --pretrained_model_name_or_path /scratch/10320/lanqing001/xinrui/FastVideo/data/hunyuan \
     --dit_model_name_or_path /scratch/10320/lanqing001/xinrui/FastVideo/data/hunyuan/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt\
@@ -48,7 +48,7 @@ srun -N 2 -n 2 \
     --max_train_steps=2000 \
     --learning_rate=1e-5 \
     --mixed_precision=bf16 \
-    --checkpointing_steps=200 \
+    --checkpointing_steps=2 \
     --validation_steps 2000 \
     --validation_sampling_steps 50 \
     --checkpoints_total_limit 5 \
