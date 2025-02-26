@@ -187,6 +187,21 @@ def train_one_step(
 
 
 def main(args):
+    # 如果没有使用 torchrun，直接用 srun 时，手动设置分布式环境变量
+    if "RANK" not in os.environ:
+        os.environ["RANK"] = os.environ.get("SLURM_PROCID", "0")
+    if "WORLD_SIZE" not in os.environ:
+        os.environ["WORLD_SIZE"] = os.environ.get("SLURM_NTASKS", "1")
+    if "LOCAL_RANK" not in os.environ:
+        os.environ["LOCAL_RANK"] = os.environ.get("SLURM_LOCALID", "0")
+    if "MASTER_ADDR" not in os.environ:
+        # 从 SLURM_NODELIST 中取第一个节点作为 master
+        os.environ["MASTER_ADDR"] = os.environ.get("SLURM_NODELIST").split()[0]
+    if "MASTER_PORT" not in os.environ:
+        # 指定一个端口，确保该端口在所有节点上都可以使用
+        os.environ["MASTER_PORT"] = "29500"
+
+
     torch.backends.cuda.matmul.allow_tf32 = True
 
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -824,6 +839,5 @@ if __name__ == "__main__":
         default="fp32",
         help="Weight type to use - fp32 or bf16.",
     )
-
     args = parser.parse_args()
     main(args)
