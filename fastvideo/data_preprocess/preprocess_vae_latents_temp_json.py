@@ -16,28 +16,9 @@ logger = get_logger(__name__)
 
 
 def main(args):
-    # 如果没有使用 torchrun，而是用 srun，则手动设置分布式环境变量
-    if "RANK" not in os.environ:
-        os.environ["RANK"] = os.environ.get("SLURM_PROCID", "0")
-    if "WORLD_SIZE" not in os.environ:
-        os.environ["WORLD_SIZE"] = os.environ.get("SLURM_NTASKS", "1")
-    if "LOCAL_RANK" not in os.environ:
-        os.environ["LOCAL_RANK"] = os.environ.get("SLURM_LOCALID", "0")
-    if "MASTER_ADDR" not in os.environ:
-        # 从 SLURM_NODELIST 中取第一个节点作为 master
-        os.environ["MASTER_ADDR"] = os.environ.get("SLURM_NODELIST", "127.0.0.1").split()[0]
-    if "MASTER_PORT" not in os.environ:
-        # 指定一个端口，确保该端口在所有节点上都可以使用
-        os.environ["MASTER_PORT"] = "29500"
-
-    # 读取环境变量
-    local_rank = int(os.environ["LOCAL_RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-    global_rank = int(os.environ["RANK"])
-
+    local_rank = int(os.getenv("RANK", 0))
+    world_size = int(os.getenv("WORLD_SIZE", 1))
     print("world_size", world_size, "local rank", local_rank)
-
-
     train_dataset = getdataset(args)
     sampler = DistributedSampler(train_dataset,
                                  rank=local_rank,
@@ -58,12 +39,12 @@ def main(args):
                                 init_method="env://",
                                 world_size=world_size,
                                 rank=local_rank)
-    vae, autocast_type, fps = load_vae(args.model_type, args.model_path)
-    vae.enable_tiling()
+    # vae, autocast_type, fps = load_vae(args.model_type, args.model_path)
+    # vae.enable_tiling()
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(os.path.join(args.output_dir, "latent"), exist_ok=True)
 
-    video_base_path = "/scratch/10320/lanqing001/xinrui/dataset/raw_mp4"
+    video_base_path = "/data/atlas/datasets/raw_mp4"
     json_data = []
     for _, data in tqdm(enumerate(train_dataloader),
                         disable=local_rank != 0,
@@ -71,9 +52,9 @@ def main(args):
                         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
                         ):
         with torch.inference_mode():
-            with torch.autocast("cuda", dtype=autocast_type):
-                latents = vae.encode(data["pixel_values"].to(
-                    encoder_device))["latent_dist"].sample()
+            # with torch.autocast("cuda", dtype=autocast_type):
+            #     latents = vae.encode(data["pixel_values"].to(
+            #         encoder_device))["latent_dist"].sample()
             for idx, video_path in enumerate(data["path"]):
                 # video_name = os.path.basename(video_path).split(".")[0]
                 # latent_path = os.path.join(args.output_dir, "latent",
@@ -91,15 +72,17 @@ def main(args):
                 latent_path = os.path.join(args.output_dir, "latent", relative_name + ".pt")
                 os.makedirs(os.path.dirname(latent_path), exist_ok=True)
 
-                torch.save(latents[idx].to(torch.bfloat16), latent_path)
+                # torch.save(latents[idx].to(torch.bfloat16), latent_path)
                 item = {}
-                item["length"] = latents[idx].shape[1]
-                # item["length"] = 12
+                # item["length"] = latents[idx].shape[1]
+                item["length"] = 12
                 # 这里将 latent_path 存为相对路径，例如 "9/xxxx.pt"
                 item["latent_path"] = relative_name + ".pt"
                 item["caption"] = data["text"][idx]
                 json_data.append(item)
                 # print(f"{relative_name} processed")
+
+
 
     dist.barrier()
     local_data = json_data

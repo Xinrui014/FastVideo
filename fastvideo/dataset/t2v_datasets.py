@@ -120,6 +120,7 @@ class T2V_dataset(Dataset):
 
     def __len__(self):
         return dataset_prog.n_elements
+        # return 2
 
     def __getitem__(self, idx):
 
@@ -257,7 +258,7 @@ class T2V_dataset(Dataset):
                     height, width = i["resolution"]["height"], i["resolution"][
                         "width"]
                     aspect = self.max_height / self.max_width
-                    hw_aspect_thr = 1.5
+                    hw_aspect_thr = 1.8
                     is_pick = filter_resolution(
                         height,
                         width,

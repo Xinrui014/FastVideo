@@ -17,9 +17,13 @@ def getdataset(args):
     resize = [
         CenterCropResizeVideo((args.max_height, args.max_width)),
     ]
+    resize_2 = [
+        CenterCropResizeVideo((1088, 1920)),
+    ]
     transform = transforms.Compose([
         # Normalize255(),
-        *resize,
+        # *resize,
+        *resize_2,
     ])
     transform_topcrop = transforms.Compose([
         Normalize255(),
