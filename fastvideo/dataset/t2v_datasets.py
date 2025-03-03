@@ -65,6 +65,7 @@ class DataSetProg(metaclass=SingletonMeta):
         return idx
 
 
+
 dataset_prog = DataSetProg()
 
 
@@ -75,6 +76,7 @@ def filter_resolution(h,
     if h / w <= max_h_div_w_ratio and h / w >= min_h_div_w_ratio:
         return True
     return False
+
 
 
 class T2V_dataset(Dataset):

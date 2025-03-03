@@ -45,7 +45,7 @@ srun -N 8 -n 8 \
     --fsdp_sharding_startegy "full" \
     --dataloader_num_workers 16 \
     --gradient_accumulation_steps=1 \
-    --max_train_steps=2000 \
+    --max_train_steps=5000 \
     --learning_rate=1e-5 \
     --mixed_precision=bf16 \
     --checkpointing_steps=200 \
@@ -57,7 +57,7 @@ srun -N 8 -n 8 \
     --cfg 0.0 \
     --ema_decay 0.999 \
     --log_validation \
-    --output_dir=/scratch/10320/lanqing001/xinrui/FastVideo/data/outputs/ZeroInit2_blocks_10_gpus_8_bs_2 \
+    --output_dir=/scratch/10320/lanqing001/xinrui/FastVideo/data/outputs/ZeroInit2_blocks_10_gpus_8_bs_2_step_5k \
     --tracker_project_name GH200_Hunyuan_ControlNet_Finetune_ZeroInit2 \
     --num_frames 45 \
     --num_height 1088 \

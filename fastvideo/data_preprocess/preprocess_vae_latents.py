@@ -40,7 +40,7 @@ def main(args):
 
     train_dataset = getdataset(args)
     sampler = DistributedSampler(train_dataset,
-                                 rank=local_rank,
+                                 rank=global_rank,
                                  num_replicas=world_size,
                                  shuffle=True)
     train_dataloader = DataLoader(
@@ -57,13 +57,14 @@ def main(args):
         dist.init_process_group(backend="nccl",
                                 init_method="env://",
                                 world_size=world_size,
-                                rank=local_rank)
+                                rank=global_rank)
     vae, autocast_type, fps = load_vae(args.model_type, args.model_path)
     vae.enable_tiling()
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(os.path.join(args.output_dir, "latent"), exist_ok=True)
 
-    video_base_path = "/scratch/10320/lanqing001/xinrui/dataset/raw_mp4"
+    # video_base_path = "/scratch/10320/lanqing001/xinrui/dataset/raw_mp4"
+    video_base_path = "/data/atlas/datasets/raw_mp4"
     json_data = []
     for _, data in tqdm(enumerate(train_dataloader),
                         disable=local_rank != 0,

@@ -113,6 +113,21 @@ def main(args):
                         args.output_dir, "prompt_attention_mask",
                         video_name + ".pt")
                     # save latent
+                    # Extract the directory part from the path.
+                    directory = os.path.dirname(prompt_embed_path)
+
+                    # Check if the directory exists; if not, create it.
+                    if not os.path.exists(directory):
+                        os.makedirs(directory)
+                        print(f"Created directory: {directory}")
+
+                    mask_directory = os.path.dirname(prompt_attention_mask_path)
+
+                    # Check if the directory exists; if not, create it.
+                    if not os.path.exists(mask_directory):
+                        os.makedirs(mask_directory)
+                        print(f"Created directory: {directory}")
+
                     torch.save(prompt_embeds[idx], prompt_embed_path)
                     torch.save(prompt_attention_mask[idx],
                                prompt_attention_mask_path)

@@ -35,8 +35,8 @@ srun -N 2 -n 2 \
     --dit_model_name_or_path /scratch/10320/lanqing001/xinrui/FastVideo/data/hunyuan/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt\
     --model_type "hunyuan_controlnet" \
     --cache_dir /scratch/10320/lanqing001/xinrui/FastVideo/data/.cache \
-    --data_json_path /scratch/10320/lanqing001/xinrui/FastVideo/data/Inte4K/videos2caption.json \
-    --validation_prompt_dir /scratch/10320/lanqing001/xinrui/FastVideo/data/Inte4K/validation \
+    --data_json_path /scratch/10320/lanqing001/xinrui/FastVideo/data/raw_mp4_10k_1088/videos2caption.json \
+    --validation_prompt_dir /scratch/10320/lanqing001/xinrui/FastVideo/data/raw_mp4_10k_1088/validation \
     --gradient_checkpointing \
     --train_batch_size=1 \
     --num_latent_t 12 \
@@ -48,7 +48,7 @@ srun -N 2 -n 2 \
     --max_train_steps=2000 \
     --learning_rate=1e-5 \
     --mixed_precision=bf16 \
-    --checkpointing_steps=2 \
+    --checkpointing_steps=1000 \
     --validation_steps 2000 \
     --validation_sampling_steps 50 \
     --checkpoints_total_limit 5 \
@@ -57,7 +57,7 @@ srun -N 2 -n 2 \
     --cfg 0.0 \
     --ema_decay 0.999 \
     --log_validation \
-    --output_dir=/scratch/10320/lanqing001/xinrui/FastVideo/data/outputs/ZeroInit2_blocks_10_gpus_8_bs_2 \
+    --output_dir=/scratch/10320/lanqing001/xinrui/FastVideo/data/outputs/ZeroInit_controlnet_block_10_gpu_8_bs_2_5000step \
     --tracker_project_name GH200_Hunyuan_ControlNet_Finetune_ZeroInit2 \
     --num_frames 45 \
     --num_height 1088 \

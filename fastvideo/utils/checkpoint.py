@@ -10,12 +10,15 @@ from torch.distributed.checkpoint.default_planner import (DefaultLoadPlanner,
                                                           DefaultSavePlanner)
 from torch.distributed.checkpoint.optimizer import \
     load_sharded_optimizer_state_dict
+import torch.distributed as dist
 from torch.distributed.fsdp import (FullOptimStateDictConfig,
                                     FullStateDictConfig)
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType
 
 from fastvideo.utils.logging_ import main_print
+
+import time
 
 
 def save_checkpoint_optimizer(model,
@@ -61,37 +64,27 @@ def save_checkpoint_optimizer(model,
     main_print(f"--> checkpoint saved at step {step}")
 
 
-def save_checkpoint(transformer, optimizer, lr_scheduler, rank, output_dir, step):
+def save_checkpoint(transformer, rank, output_dir, step):
     main_print(f"--> saving checkpoint at step {step}")
-    # 使用 FSDP 获取完整状态字典，并 offload 到 CPU（只在 rank0 保存）
     with FSDP.state_dict_type(
             transformer,
             StateDictType.FULL_STATE_DICT,
             FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
     ):
         cpu_state = transformer.state_dict()
+    # todo move to get_state_dict
     if rank <= 0:
         save_dir = os.path.join(output_dir, f"checkpoint-{step}")
         os.makedirs(save_dir, exist_ok=True)
-        # 保存模型权重（这里使用 safetensors 保存）
-        weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
+        # save using safetensors
+        weight_path = os.path.join(save_dir,
+                                   "diffusion_pytorch_model.safetensors")
         save_file(cpu_state, weight_path)
-
-        # 构造训练状态字典，包含优化器和 lr_scheduler 状态，以及当前 step
-        training_state = {
-            "optimizer_state_dict": optimizer.state_dict(),
-            "lr_scheduler_state_dict": lr_scheduler.state_dict(),
-            "global_step": step,
-            # 你还可以保存其他需要恢复的状态，例如 RNG 状态、epoch 等
-        }
-        training_state_path = os.path.join(save_dir, "training_state.pth")
-        torch.save(training_state, training_state_path)
-
-        # 保存配置文件
         config_dict = dict(transformer.config)
         if "dtype" in config_dict:
-            del config_dict["dtype"]  # 根据需要删除或修改
+            del config_dict["dtype"]  # TODO
         config_path = os.path.join(save_dir, "config.json")
+        # save dict as json
         with open(config_path, "w") as f:
             json.dump(config_dict, f, indent=4)
     main_print(f"--> checkpoint saved at step {step}")

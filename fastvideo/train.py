@@ -208,7 +208,7 @@ def main(args):
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     rank = int(os.environ.get("RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
-    dist.init_process_group("nccl", timeout=datetime.timedelta(seconds=5400))
+    dist.init_process_group("nccl", timeout=datetime.timedelta(seconds=1200))
     torch.cuda.set_device(local_rank)
     device = torch.cuda.current_device()
     initialize_sequence_parallel_state(args.sp_size)

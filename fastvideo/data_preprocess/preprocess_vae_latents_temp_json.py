@@ -16,12 +16,29 @@ logger = get_logger(__name__)
 
 
 def main(args):
-    local_rank = int(os.getenv("RANK", 0))
-    world_size = int(os.getenv("WORLD_SIZE", 1))
+    # 如果没有使用 torchrun，而是用 srun，则手动设置分布式环境变量
+    if "RANK" not in os.environ:
+        os.environ["RANK"] = os.environ.get("SLURM_PROCID", "0")
+    if "WORLD_SIZE" not in os.environ:
+        os.environ["WORLD_SIZE"] = os.environ.get("SLURM_NTASKS", "1")
+    if "LOCAL_RANK" not in os.environ:
+        os.environ["LOCAL_RANK"] = os.environ.get("SLURM_LOCALID", "0")
+    if "MASTER_ADDR" not in os.environ:
+        # 从 SLURM_NODELIST 中取第一个节点作为 master
+        os.environ["MASTER_ADDR"] = os.environ.get("SLURM_NODELIST", "127.0.0.1").split()[0]
+    if "MASTER_PORT" not in os.environ:
+        # 指定一个端口，确保该端口在所有节点上都可以使用
+        os.environ["MASTER_PORT"] = "29500"
+
+    # 读取环境变量
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    global_rank = int(os.environ["RANK"])
+
     print("world_size", world_size, "local rank", local_rank)
     train_dataset = getdataset(args)
     sampler = DistributedSampler(train_dataset,
-                                 rank=local_rank,
+                                 rank=global_rank,
                                  num_replicas=world_size,
                                  shuffle=True)
     train_dataloader = DataLoader(
@@ -38,13 +55,13 @@ def main(args):
         dist.init_process_group(backend="nccl",
                                 init_method="env://",
                                 world_size=world_size,
-                                rank=local_rank)
+                                rank=global_rank)
     # vae, autocast_type, fps = load_vae(args.model_type, args.model_path)
     # vae.enable_tiling()
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(os.path.join(args.output_dir, "latent"), exist_ok=True)
 
-    video_base_path = "/data/atlas/datasets/raw_mp4"
+    video_base_path = "/scratch/10320/lanqing001/xinrui/dataset/raw_mp4"
     json_data = []
     for _, data in tqdm(enumerate(train_dataloader),
                         disable=local_rank != 0,
