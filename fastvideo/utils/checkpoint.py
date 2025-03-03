@@ -64,29 +64,32 @@ def save_checkpoint_optimizer(model,
     main_print(f"--> checkpoint saved at step {step}")
 
 
+from torch.distributed.checkpoint.state_dict import get_state_dict
+from torch.distributed.fsdp import FullStateDictConfig, StateDictType
+
 def save_checkpoint(transformer, rank, output_dir, step):
     main_print(f"--> saving checkpoint at step {step}")
-    with FSDP.state_dict_type(
-            transformer,
-            StateDictType.FULL_STATE_DICT,
-            FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
-    ):
-        cpu_state = transformer.state_dict()
-    # todo move to get_state_dict
+
+    cpu_state = get_state_dict(
+        transformer,
+        state_dict_type=StateDictType.FULL_STATE_DICT,
+        state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+    )
+
     if rank <= 0:
         save_dir = os.path.join(output_dir, f"checkpoint-{step}")
         os.makedirs(save_dir, exist_ok=True)
-        # save using safetensors
-        weight_path = os.path.join(save_dir,
-                                   "diffusion_pytorch_model.safetensors")
+
+        weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
         save_file(cpu_state, weight_path)
+
         config_dict = dict(transformer.config)
-        if "dtype" in config_dict:
-            del config_dict["dtype"]  # TODO
+        config_dict.pop("dtype", None)  # 更稳健删除key
+
         config_path = os.path.join(save_dir, "config.json")
-        # save dict as json
         with open(config_path, "w") as f:
             json.dump(config_dict, f, indent=4)
+
     main_print(f"--> checkpoint saved at step {step}")
 
 

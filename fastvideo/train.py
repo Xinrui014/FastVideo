@@ -540,7 +540,7 @@ def main(args):
                                      args.output_dir, step, pipe)
             else:
                 # Your existing checkpoint saving code
-                save_checkpoint(transformer, optimizer, lr_scheduler, rank, args.output_dir, step)
+                save_checkpoint(transformer, rank, args.output_dir, step)
             dist.barrier()
         if args.log_validation and step % args.validation_steps == 0:
             log_validation(args,

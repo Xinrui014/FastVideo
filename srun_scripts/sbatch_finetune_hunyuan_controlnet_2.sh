@@ -48,7 +48,7 @@ srun -N 2 -n 2 \
     --max_train_steps=2000 \
     --learning_rate=1e-5 \
     --mixed_precision=bf16 \
-    --checkpointing_steps=1000 \
+    --checkpointing_steps=5 \
     --validation_steps 2000 \
     --validation_sampling_steps 50 \
     --checkpoints_total_limit 5 \
