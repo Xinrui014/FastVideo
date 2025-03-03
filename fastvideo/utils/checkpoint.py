@@ -65,32 +65,34 @@ def save_checkpoint_optimizer(model,
 
 
 from torch.distributed.checkpoint.state_dict import get_state_dict
-from torch.distributed.fsdp import FullStateDictConfig, StateDictType
+from torch.distributed.fsdp import ShardedStateDictConfig, StateDictType
+import torch.distributed.checkpoint as dist_cp
 
-def save_checkpoint(transformer, rank, output_dir, step):
-    main_print(f"--> saving checkpoint at step {step}")
 
-    cpu_state = get_state_dict(
+def save_sharded_checkpoint(transformer, rank, output_dir, step):
+    main_print(f"--> saving sharded checkpoint at step {step}")
+
+    # 使用ShardedStateDict进行分片保存
+    state_dict = get_state_dict(
         transformer,
-        state_dict_type=StateDictType.FULL_STATE_DICT,
-        state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        state_dict_type=StateDictType.SHARDED_STATE_DICT,
+        state_dict_config=ShardedStateDictConfig(offload_to_cpu=False)
     )
 
-    if rank <= 0:
-        save_dir = os.path.join(output_dir, f"checkpoint-{step}")
-        os.makedirs(save_dir, exist_ok=True)
+    # 所有rank都会调用，自动保存各自的分片到指定目录
+    save_dir = os.path.join(output_dir, f"checkpoint-{step}")
+    storage_writer = dist_cp.FileSystemWriter(save_dir)
+    dist_cp.save_state_dict(state_dict=state_dict, storage_writer=storage_writer)
 
-        weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
-        save_file(cpu_state, weight_path)
-
+    if rank == 0:
+        # rank 0 额外保存config.json
         config_dict = dict(transformer.config)
-        config_dict.pop("dtype", None)  # 更稳健删除key
-
+        config_dict.pop("dtype", None)
         config_path = os.path.join(save_dir, "config.json")
         with open(config_path, "w") as f:
             json.dump(config_dict, f, indent=4)
 
-    main_print(f"--> checkpoint saved at step {step}")
+    main_print(f"--> sharded checkpoint saved at step {step}")
 
 
 def save_checkpoint_generator_discriminator(
