@@ -81,7 +81,7 @@ class LatentDataset_LR(Dataset):
     ):
         # data_merge_path: video_dir, latent_dir, prompt_embed_dir, json_path
         self.json_path = json_path
-        self.lr_json_path = json_path.replace("Inte4K", "Inter4K-720")
+        self.lr_json_path = json_path.replace("1088", "720")
         self.cfg_rate = cfg_rate
         self.dataset_dir_path = os.path.dirname(json_path)
         self.lr_dataset_dir_path = os.path.dirname(self.lr_json_path)
@@ -147,6 +147,7 @@ class LatentDataset_LR(Dataset):
 
     def __len__(self):
         return len(self.data_anno)
+
 
 
 def latent_collate_function(batch):

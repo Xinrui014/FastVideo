@@ -17,6 +17,8 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType
 
 from fastvideo.utils.logging_ import main_print
+from torch.distributed.checkpoint.state_dict import get_state_dict
+from torch.distributed.fsdp import ShardedStateDictConfig, StateDictType
 
 import time
 
@@ -64,30 +66,41 @@ def save_checkpoint_optimizer(model,
     main_print(f"--> checkpoint saved at step {step}")
 
 
-from torch.distributed.checkpoint.state_dict import get_state_dict
-from torch.distributed.fsdp import ShardedStateDictConfig, StateDictType
-import torch.distributed.checkpoint as dist_cp
+def save_checkpoint(transformer, rank, output_dir, step):
+    """
+    Save FSDP model checkpoint in a memory-efficient sharded manner.
 
-
-def save_sharded_checkpoint(transformer, rank, output_dir, step):
+    Args:
+        transformer (FSDP): The FSDP model to save
+        rank (int): Current process rank
+        output_dir (str): Directory to save checkpoints
+        step (int): Training step/iteration number
+    """
     main_print(f"--> saving sharded checkpoint at step {step}")
 
-    # 使用ShardedStateDict进行分片保存
-    state_dict = get_state_dict(
-        transformer,
-        state_dict_type=StateDictType.SHARDED_STATE_DICT,
-        state_dict_config=ShardedStateDictConfig(offload_to_cpu=False)
-    )
+    # Use sharded state dict to avoid full model loading
+    with FSDP.state_dict_type(
+            transformer,
+            StateDictType.SHARDED_STATE_DICT,
+            ShardedStateDictConfig(offload_to_cpu=True)
+    ):
+        # Get sharded state dict
+        sharded_state = transformer.state_dict()
 
-    # 所有rank都会调用，自动保存各自的分片到指定目录
+    # Prepare save directory
     save_dir = os.path.join(output_dir, f"checkpoint-{step}")
-    storage_writer = dist_cp.FileSystemWriter(save_dir)
-    dist_cp.save_state_dict(state_dict=state_dict, storage_writer=storage_writer)
+    os.makedirs(save_dir, exist_ok=True)
 
+    # Save sharded weights
+    weight_path = os.path.join(save_dir, f"model_shard_{rank}.safetensors")
+    save_file(sharded_state, weight_path)
+
+    # Save configuration (only on rank 0)
     if rank == 0:
-        # rank 0 额外保存config.json
         config_dict = dict(transformer.config)
-        config_dict.pop("dtype", None)
+        if "dtype" in config_dict:
+            del config_dict["dtype"]  # Remove dtype if present
+
         config_path = os.path.join(save_dir, "config.json")
         with open(config_path, "w") as f:
             json.dump(config_dict, f, indent=4)
