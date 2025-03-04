@@ -82,7 +82,7 @@ def save_checkpoint(transformer, rank, output_dir, step):
     with FSDP.state_dict_type(
             transformer,
             StateDictType.SHARDED_STATE_DICT,
-            ShardedStateDictConfig(offload_to_cpu=True)
+            ShardedStateDictConfig(offload_to_cpu=False)
     ):
         # Get sharded state dict
         sharded_state = transformer.state_dict()
@@ -92,8 +92,8 @@ def save_checkpoint(transformer, rank, output_dir, step):
     os.makedirs(save_dir, exist_ok=True)
 
     # Save sharded weights
-    weight_path = os.path.join(save_dir, f"model_shard_{rank}.safetensors")
-    save_file(sharded_state, weight_path)
+    weight_path = os.path.join(save_dir, f"model_shard_{rank}.pth")
+    torch.save(sharded_state, weight_path)
 
     # Save configuration (only on rank 0)
     if rank == 0:

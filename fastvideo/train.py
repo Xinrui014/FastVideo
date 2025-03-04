@@ -554,7 +554,7 @@ def main(args):
         save_lora_checkpoint(transformer, optimizer, rank, args.output_dir,
                              args.max_train_steps, pipe)
     else:
-        save_checkpoint(transformer, optimizer, lr_scheduler, rank, args.output_dir,
+        save_checkpoint(transformer, rank, args.output_dir,
                         args.max_train_steps)
 
     if get_sequence_parallel_state():
