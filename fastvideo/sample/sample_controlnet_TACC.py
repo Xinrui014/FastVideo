@@ -233,25 +233,18 @@ def load_hunyuan_sharded_fsdp(model_root_path, rank, checkpoint_dir, args):
     print(f"Rank {local_rank}: Loading state dict from {shard_path}")
     checkpoint = torch.load(shard_path, map_location=device)
 
-    if rank == 0:
-        # Print checkpoint structure
-        print(f"Rank 0: Checkpoint contains {len(checkpoint.keys())} keys")
-        for i, key in enumerate(list(checkpoint.keys())):
-            print(f"  - {key}")
-
-        print(f"Rank 0: Model contains {sum(1 for _ in model.named_parameters())} parameters")
-        for i, (name, _) in enumerate(model.named_parameters()):
-            print(f"  - {name}")
-
     # Direct loading approach for sharded checkpoints
     try:
         print(f"Rank {local_rank}: Attempting to load checkpoint directly")
         # FSDP models may require unwrapping before loading
-        from torch.distributed.fsdp import FullStateDictConfig, StateDictType
+        from torch.distributed.fsdp import StateDictType, ShardedStateDictConfig
 
-        with FSDP.state_dict_type(model, StateDictType.LOCAL_STATE_DICT):
-            local_state_dict = {k: v for k, v in checkpoint.items() if not k.endswith('.local_shards')}
-            model.load_state_dict(local_state_dict, strict=False)
+        with FSDP.state_dict_type(
+                model,
+                StateDictType.SHARDED_STATE_DICT,
+                ShardedStateDictConfig(offload_to_cpu=False)
+        ):
+            model.load_state_dict(checkpoint,strict=False)
     except Exception as e:
         print(f"Rank {local_rank}: Direct loading failed: {str(e)}")
 
