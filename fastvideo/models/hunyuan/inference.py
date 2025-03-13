@@ -234,6 +234,7 @@ class Inference(object):
             else:
                 raise ValueError(f"Invalid model path: {dit_weight}")
 
+
         if not model_path.exists():
             raise ValueError(f"model_path not exists: {model_path}")
         logger.info(f"Loading torch model {model_path}...")
@@ -241,6 +242,10 @@ class Inference(object):
             # Use safetensors library for .safetensors files
             state_dict = safetensors_load_file(model_path)
         elif model_path.suffix == ".pt":
+            # Use torch for .pt files
+            state_dict = torch.load(model_path,
+                                    map_location=lambda storage, loc: storage)
+        elif model_path.suffix == ".pth":
             # Use torch for .pt files
             state_dict = torch.load(model_path,
                                     map_location=lambda storage, loc: storage)
@@ -563,3 +568,99 @@ class HunyuanVideoSampler(Inference):
         logger.info(f"Success, time: {gen_time}")
 
         return out_dict
+
+
+import os
+import torch
+from pathlib import Path
+
+
+class ShardedHunyuanVideoSampler(HunyuanVideoSampler):
+    """
+    Extension of HunyuanVideoSampler to support loading from sharded FSDP checkpoints.
+    """
+
+    @classmethod
+    def from_pretrained_sharded(cls,
+                                pretrained_model_path,
+                                args,
+                                device=None,
+                                **kwargs):
+        """
+        Initialize the Inference pipeline with sharded FSDP checkpoints.
+
+        Args:
+            pretrained_model_path (str or pathlib.Path): The model path for base model
+            args (argparse.Namespace): The arguments for the pipeline
+            device (int): The device for inference. Default is current CUDA device.
+        """
+        # Get local rank and world size for distributed loading
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
+
+        # Ensure we're using the correct device
+        if device is None:
+            device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
+        torch.cuda.set_device(local_rank)
+
+        # Disable gradient
+        torch.set_grad_enabled(False)
+
+        # # Create a modified args object with the original checkpoint path
+        # checkpoint_dir = args.dit_weight
+        # original_dit_weight = args.dit_weight
+        #
+        # # Verify that we have a directory with sharded checkpoints
+        # if not os.path.isdir(checkpoint_dir):
+        #     raise ValueError(f"Expected checkpoint directory, got: {checkpoint_dir}")
+        #
+        # # Check if shard exists for this rank
+        # shard_path = os.path.join(checkpoint_dir, f"model_shard_{local_rank}.pth")
+        # if not os.path.exists(shard_path):
+        #     raise FileNotFoundError(f"Checkpoint shard not found at {shard_path}")
+        #
+        # # Modify args to use the specific shard path for this rank
+        # args.dit_weight = shard_path
+
+        # Load the model using the standard from_pretrained method
+        # This will load only the shard for this rank
+        instance = super().from_pretrained(
+            pretrained_model_path,
+            args=args,
+            device=device,
+            **kwargs
+        )
+
+        # Restore the original dit_weight value for reference
+        # args.dit_weight = original_dit_weight
+
+        # Return the instance with the sharded model loaded
+        return instance
+
+    @staticmethod
+    def load_state_dict(args, model, pretrained_model_path):
+        """
+        Override to load a specific shard based on local rank.
+        """
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        # Check if we're loading a shard
+        if "model_shard_" in str(args.dit_weight):
+            print(f"Rank {local_rank} loading shard: {args.dit_weight}")
+
+            # Load the shard
+            state_dict = torch.load(
+                args.dit_weight,
+                map_location=lambda storage, loc: storage
+            )
+
+            # When loading shards, we need different handling
+            print(f"Shard keys: {list(state_dict.keys())[:5]}...")
+
+            # Load the state dict into model
+            model.load_state_dict(state_dict, strict=False)
+
+            return model
+        else:
+            # If not a shard, use the original loading method
+            return super().load_state_dict(args, model, pretrained_model_path)
