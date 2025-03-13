@@ -332,9 +332,9 @@ def main(args):
     loader = sp_parallel_dataloader_wrapper_LR(
         train_dataloader,
         device,
-        args.train_batch_size,
+        1,
         args.sp_size,
-        args.train_sp_batch_size,
+        1,
     )
     i = 0
     for batch in loader:
@@ -342,7 +342,7 @@ def main(args):
             break
         if rank == 0:
             i = i + 1
-        print(f"Rank {rank}/{world_size} batch {i}/{len(loader)}")
+        print(f"the {i} video")
 
         latent, lr_latents, prompt_embed, prompt_attention_mask, _ = batch
         lr_latents = lr_latents.cuda()

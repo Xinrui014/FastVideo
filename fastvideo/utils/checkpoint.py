@@ -66,46 +66,70 @@ def save_checkpoint_optimizer(model,
     main_print(f"--> checkpoint saved at step {step}")
 
 
+# def save_checkpoint(transformer, rank, output_dir, step):
+#     """
+#     Save FSDP model checkpoint in a memory-efficient sharded manner.
+#
+#     Args:
+#         transformer (FSDP): The FSDP model to save
+#         rank (int): Current process rank
+#         output_dir (str): Directory to save checkpoints
+#         step (int): Training step/iteration number
+#     """
+#     main_print(f"--> saving sharded checkpoint at step {step}")
+#
+#     # Use sharded state dict to avoid full model loading
+#     with FSDP.state_dict_type(
+#             transformer,
+#             StateDictType.SHARDED_STATE_DICT,
+#             ShardedStateDictConfig(offload_to_cpu=False)
+#     ):
+#         # Get sharded state dict
+#         sharded_state = transformer.state_dict()
+#
+#     # Prepare save directory
+#     save_dir = os.path.join(output_dir, f"checkpoint-{step}")
+#     os.makedirs(save_dir, exist_ok=True)
+#
+#     # Save sharded weights
+#     weight_path = os.path.join(save_dir, f"model_shard_{rank}.pth")
+#     torch.save(sharded_state, weight_path)
+#
+#     # Save configuration (only on rank 0)
+#     if rank == 0:
+#         config_dict = dict(transformer.config)
+#         if "dtype" in config_dict:
+#             del config_dict["dtype"]  # Remove dtype if present
+#
+#         config_path = os.path.join(save_dir, "config.json")
+#         with open(config_path, "w") as f:
+#             json.dump(config_dict, f, indent=4)
+#
+#     main_print(f"--> sharded checkpoint saved at step {step}")
 def save_checkpoint(transformer, rank, output_dir, step):
-    """
-    Save FSDP model checkpoint in a memory-efficient sharded manner.
-
-    Args:
-        transformer (FSDP): The FSDP model to save
-        rank (int): Current process rank
-        output_dir (str): Directory to save checkpoints
-        step (int): Training step/iteration number
-    """
-    main_print(f"--> saving sharded checkpoint at step {step}")
-
-    # Use sharded state dict to avoid full model loading
+    main_print(f"--> saving checkpoint at step {step}")
     with FSDP.state_dict_type(
             transformer,
-            StateDictType.SHARDED_STATE_DICT,
-            ShardedStateDictConfig(offload_to_cpu=False)
+            StateDictType.FULL_STATE_DICT,
+            FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
     ):
-        # Get sharded state dict
-        sharded_state = transformer.state_dict()
-
-    # Prepare save directory
-    save_dir = os.path.join(output_dir, f"checkpoint-{step}")
-    os.makedirs(save_dir, exist_ok=True)
-
-    # Save sharded weights
-    weight_path = os.path.join(save_dir, f"model_shard_{rank}.pth")
-    torch.save(sharded_state, weight_path)
-
-    # Save configuration (only on rank 0)
-    if rank == 0:
+        cpu_state = transformer.state_dict()
+    # todo move to get_state_dict
+    if rank <= 0:
+        save_dir = os.path.join(output_dir, f"checkpoint-{step}")
+        os.makedirs(save_dir, exist_ok=True)
+        # save using safetensors
+        weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
+        save_file(cpu_state, weight_path)
         config_dict = dict(transformer.config)
         if "dtype" in config_dict:
-            del config_dict["dtype"]  # Remove dtype if present
-
+            del config_dict["dtype"]  # TODO
         config_path = os.path.join(save_dir, "config.json")
+        # save dict as json
         with open(config_path, "w") as f:
             json.dump(config_dict, f, indent=4)
+    main_print(f"--> checkpoint saved at step {step}")
 
-    main_print(f"--> sharded checkpoint saved at step {step}")
 
 
 def save_checkpoint_generator_discriminator(
