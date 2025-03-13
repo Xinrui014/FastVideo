@@ -75,13 +75,13 @@ def load_hunyuan_sharded_fsdp(model_root_path, rank, checkpoint_dir, args):
     from fastvideo.models.hunyuan.inference import HunyuanVideoSampler
 
     # Get distributed info
-    # local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     # rank = int(os.environ.get("RANK", 0))
 
     # Set the device for this rank
-    device = f"cuda:{rank}" if torch.cuda.is_available() else "cpu"
-    torch.cuda.set_device(rank)
+    device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
+    torch.cuda.set_device(local_rank)
 
     # Ensure distributed is initialized
     if not dist.is_initialized() and world_size > 1:
@@ -104,7 +104,6 @@ def load_hunyuan_sharded_fsdp(model_root_path, rank, checkpoint_dir, args):
 
     # Path to the specific shard for this rank
     shard_path = os.path.join(checkpoint_dir, f"model_shard_{rank}.pth")
-    print(f"Shard path: {shard_path}")
 
     # Check if the shard exists
     # if not shard_path.exists():
@@ -234,6 +233,16 @@ def load_hunyuan_sharded_fsdp(model_root_path, rank, checkpoint_dir, args):
     print(f"Rank {local_rank}: Loading state dict from {shard_path}")
     checkpoint = torch.load(shard_path, map_location=device)
 
+    if rank == 0:
+        # Print checkpoint structure
+        print(f"Rank 0: Checkpoint contains {len(checkpoint.keys())} keys")
+        for i, key in enumerate(list(checkpoint.keys())):
+            print(f"  - {key}")
+
+        print(f"Rank 0: Model contains {sum(1 for _ in model.named_parameters())} parameters")
+        for i, (name, _) in enumerate(model.named_parameters()):
+            print(f"  - {name}")
+
     # Direct loading approach for sharded checkpoints
     try:
         print(f"Rank {local_rank}: Attempting to load checkpoint directly")
@@ -356,7 +365,7 @@ def main(args):
             prompts = f.readlines()
 
         # add lr_latents:
-        train_dataset = LatentDataset_LR("/data/atlas/projects/FastVideo/data/Inte4K/videos2caption.json",
+        train_dataset = LatentDataset_LR("/scracth/10320/lanqing001/xinrui/FastVideo/data/Inte4K/videos2caption.json",
                                          16, 0.0)
 
         sampler = (LengthGroupedSampler(
