@@ -247,6 +247,7 @@ def load_hunyuan_sharded_fsdp(model_root_path, rank, checkpoint_dir, args):
         model.load_state_dict(checkpoint,strict=False)
 
     model.eval()
+    torch.set_grad_enabled(False)
 
     # Synchronize before creating the sampler
     if world_size > 1:
@@ -337,7 +338,7 @@ def main(args):
         1,
     )
     i = 0
-    for batch in loader:
+    for _, batch in train_dataloader:
         if i > 2:  # Process only the first 3
             break
         if rank == 0:
