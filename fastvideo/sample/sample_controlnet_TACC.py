@@ -304,7 +304,7 @@ def main(args):
             prompts = f.readlines()
 
         # add lr_latents:
-        train_dataset = LatentDataset_LR("/scracth/10320/lanqing001/xinrui/FastVideo/data/Inter4K-1088/videos2caption.json",
+        train_dataset = LatentDataset_LR("/scratch/10320/lanqing001/xinrui/FastVideo/data/Inter4K-1088/videos2caption.json",
                                          16, 0.0)
 
         sampler = (LengthGroupedSampler(
