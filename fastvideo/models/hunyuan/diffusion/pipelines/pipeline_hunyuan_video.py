@@ -1303,8 +1303,10 @@ class HunyuanVideoPipeline_LR(HunyuanVideoPipeline):
         self._num_timesteps = len(timesteps)
 
         # if is_progress_bar:
+        print("work at progress_bar")
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                print("timestep is {}".format(t))
                 if self.interrupt:
                     continue
 

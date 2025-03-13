@@ -110,6 +110,7 @@ class LatentDataset_LR(Dataset):
 
     def __getitem__(self, idx):
         latent_file = self.data_anno[idx]["latent_path"]
+        print("--------------Now is processing {}----------------------------".format(latent_file))
         lr_latent_file = self.lr_data_anno[idx]["latent_path"]
         prompt_embed_file = self.data_anno[idx]["prompt_embed_path"]
         prompt_attention_mask_file = self.data_anno[idx][

@@ -25,6 +25,8 @@ from fastvideo.utils.load import load_transformer
 from fastvideo.utils.fsdp_util import get_dit_fsdp_kwargs
 from fastvideo.utils.parallel_states import (
     initialize_sequence_parallel_state, nccl_info)
+from fastvideo.utils.communications import (broadcast,
+                                            sp_parallel_dataloader_wrapper, sp_parallel_dataloader_wrapper_LR)
 
 
 def initialize_distributed():
@@ -279,6 +281,7 @@ def main(args):
     # Initialize distributed environment
     rank, world_size = initialize_distributed()
     print(f"Process {rank}/{world_size} initialized")
+    device = torch.cuda.current_device()
 
     # Setup model path and check if exists
     models_root_path = Path(args.model_path)
@@ -298,93 +301,102 @@ def main(args):
     # Get the updated args
     args = hunyuan_video_sampler.args
 
-    # Only rank 0 handles the dataset and inference
-    if rank == 0:
-        with open(args.prompt) as f:
-            prompts = f.readlines()
+    with open(args.prompt) as f:
+        prompts = f.readlines()
 
-        # add lr_latents:
-        train_dataset = LatentDataset_LR("/scratch/10320/lanqing001/xinrui/FastVideo/data/Inter4K-1088/videos2caption.json",
-                                         16, 0.0)
+    # add lr_latents:
+    train_dataset = LatentDataset_LR("/scratch/10320/lanqing001/xinrui/FastVideo/data/Inter4K-1088/videos2caption.json",
+                                     12, 0.0)
 
-        sampler = (LengthGroupedSampler(
-            1,  # batch size
-            rank=0,
-            world_size=1,
-            lengths=train_dataset.lengths,
-            group_frame=args.group_frame,
-            group_resolution=args.group_resolution,
-        ) if (args.group_frame or args.group_resolution) else DistributedSampler(
-            train_dataset, rank=0, num_replicas=1, shuffle=False))
+    sampler = (LengthGroupedSampler(
+        1,  # batch size
+        rank=rank,
+        world_size=world_size,
+        lengths=train_dataset.lengths,
+        group_frame=args.group_frame,
+        group_resolution=args.group_resolution,
+    ) if (args.group_frame or args.group_resolution) else DistributedSampler(
+        train_dataset, rank=rank, num_replicas=world_size, shuffle=False))
 
-        train_dataloader = DataLoader(
-            train_dataset,
-            sampler=sampler,
-            collate_fn=latent_collate_function_LR,
-            pin_memory=True,
-            batch_size=1,
-            num_workers=8,
-            drop_last=True,
-            shuffle=False,
+    train_dataloader = DataLoader(
+        train_dataset,
+        sampler=sampler,
+        collate_fn=latent_collate_function_LR,
+        pin_memory=True,
+        batch_size=1,
+        num_workers=16,
+        drop_last=True,
+        shuffle=False,
+    )
+
+    loader = sp_parallel_dataloader_wrapper_LR(
+        train_dataloader,
+        device,
+        args.train_batch_size,
+        args.sp_size,
+        args.train_sp_batch_size,
+    )
+    i = 0
+    for batch in loader:
+        if i > 2:  # Process only the first 3
+            break
+        if rank == 0:
+            i = i + 1
+        print(f"Rank {rank}/{world_size} batch {i}/{len(loader)}")
+
+        latent, lr_latents, prompt_embed, prompt_attention_mask, _ = batch
+        lr_latents = lr_latents.cuda()
+        prompt = prompts[i].strip()
+
+        print(f"Processing prompt: {prompt}")
+
+        # Run inference
+        outputs = hunyuan_video_sampler.predict(
+            prompt=prompt,
+            lr_latents=lr_latents,
+            height=args.height,
+            width=args.width,
+            video_length=args.num_frames,
+            seed=args.seed,
+            negative_prompt=args.neg_prompt,
+            infer_steps=args.num_inference_steps,
+            guidance_scale=args.guidance_scale,
+            num_videos_per_prompt=args.num_videos,
+            flow_shift=args.flow_shift,
+            batch_size=args.batch_size,
+            embedded_guidance_scale=args.embedded_cfg_scale,
         )
 
-        for i, batch in enumerate(train_dataloader):
-            if i > 2:  # Process only the first 3
-                break
+        # Process high-resolution samples
+        high_res_video = outputs["samples"]
+        high_res_frames = []
+        frames_high = rearrange(high_res_video, "b c t h w -> t b c h w")
+        for frame in frames_high:
+            frame_grid = torchvision.utils.make_grid(frame, nrow=6)
+            frame_grid = frame_grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+            high_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
 
-            latent, lr_latents, prompt_embed, prompt_attention_mask, _ = batch
-            lr_latents = lr_latents.cuda()
-            prompt = prompts[i].strip()
+        # Save the high-resolution video
+        output_filename = os.path.join(os.path.dirname(args.output_path),
+                                       f"{i}_{prompt[:20].replace(' ', '_')}.mp4")
+        imageio.mimsave(output_filename, high_res_frames, fps=args.fps)
+        print(f"Saved high-res video to {output_filename}")
 
-            print(f"Processing prompt: {prompt}")
-
-            # Run inference
-            outputs = hunyuan_video_sampler.predict(
-                prompt=prompt,
-                lr_latents=lr_latents,
-                height=args.height,
-                width=args.width,
-                video_length=args.num_frames,
-                seed=args.seed,
-                negative_prompt=args.neg_prompt,
-                infer_steps=args.num_inference_steps,
-                guidance_scale=args.guidance_scale,
-                num_videos_per_prompt=args.num_videos,
-                flow_shift=args.flow_shift,
-                batch_size=args.batch_size,
-                embedded_guidance_scale=args.embedded_cfg_scale,
-            )
-
-            # Process high-resolution samples
-            high_res_video = outputs["samples"]
-            high_res_frames = []
-            frames_high = rearrange(high_res_video, "b c t h w -> t b c h w")
-            for frame in frames_high:
+        if outputs.get("samples_lr", 0) != 0:
+            # Process low-resolution samples
+            low_res_video = outputs["samples_lr"]
+            low_res_frames = []
+            frames_low = rearrange(low_res_video, "b c t h w -> t b c h w")
+            for frame in frames_low:
                 frame_grid = torchvision.utils.make_grid(frame, nrow=6)
                 frame_grid = frame_grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
-                high_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
+                low_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
 
-            # Save the high-resolution video
-            output_filename = os.path.join(os.path.dirname(args.output_path),
-                                           f"{i}_{prompt[:20].replace(' ', '_')}.mp4")
-            imageio.mimsave(output_filename, high_res_frames, fps=args.fps)
-            print(f"Saved high-res video to {output_filename}")
-
-            if outputs.get("samples_lr", 0) != 0:
-                # Process low-resolution samples
-                low_res_video = outputs["samples_lr"]
-                low_res_frames = []
-                frames_low = rearrange(low_res_video, "b c t h w -> t b c h w")
-                for frame in frames_low:
-                    frame_grid = torchvision.utils.make_grid(frame, nrow=6)
-                    frame_grid = frame_grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
-                    low_res_frames.append((frame_grid * 255).numpy().astype(np.uint8))
-
-                # Save the low-resolution video
-                low_res_filename = os.path.join(os.path.dirname(args.output_path),
-                                                f"{i}_{prompt[:20].replace(' ', '_')}_low_res.mp4")
-                imageio.mimsave(low_res_filename, low_res_frames, fps=args.fps)
-                print(f"Saved low-res video to {low_res_filename}")
+            # Save the low-resolution video
+            low_res_filename = os.path.join(os.path.dirname(args.output_path),
+                                            f"{i}_{prompt[:20].replace(' ', '_')}_low_res.mp4")
+            imageio.mimsave(low_res_filename, low_res_frames, fps=args.fps)
+            print(f"Saved low-res video to {low_res_filename}")
 
     # Wait for all processes to complete
     dist.barrier()

@@ -509,6 +509,8 @@ class HunyuanVideoSampler(Inference):
        embedded_guidance_scale: {embedded_guidance_scale}"""
         logger.debug(debug_str)
 
+        print("work at HunyuanVideoSampler")
+
         # ========================================================================
         # Pipeline inference
         # ========================================================================
