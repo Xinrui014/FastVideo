@@ -46,8 +46,8 @@ def initialize_distributed():
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     print(f"Initializing distributed: rank={local_rank}, world_size={world_size}")
     torch.cuda.set_device(local_rank)
-    dist.init_process_group(backend="nccl")
-    initialize_sequence_parallel_state(world_size)
+    dist.init_process_group(backend="nccl", init_method="env://")
+    initialize_sequence_parallel_state(args.sp_size)
 
     return rank, world_size
 
@@ -233,55 +233,16 @@ def load_hunyuan_sharded_fsdp(model_root_path, rank, checkpoint_dir, args):
     print(f"Rank {local_rank}: Loading state dict from {shard_path}")
     checkpoint = torch.load(shard_path, map_location=device)
 
-    # Direct loading approach for sharded checkpoints
-    try:
-        print(f"Rank {local_rank}: Attempting to load checkpoint directly")
-        # FSDP models may require unwrapping before loading
-        from torch.distributed.fsdp import StateDictType, ShardedStateDictConfig
+    print(f"Rank {local_rank}: Attempting to load checkpoint directly")
+    # FSDP models may require unwrapping before loading
+    from torch.distributed.fsdp import StateDictType, ShardedStateDictConfig
 
-        with FSDP.state_dict_type(
-                model,
-                StateDictType.SHARDED_STATE_DICT,
-                ShardedStateDictConfig(offload_to_cpu=False)
-        ):
-            model.load_state_dict(checkpoint,strict=False)
-    except Exception as e:
-        print(f"Rank {local_rank}: Direct loading failed: {str(e)}")
-
-        # Fallback to flat parameter loading approach
-        print(f"Rank {local_rank}: Falling back to flat parameter loading")
-        flat_params = {}
-
-        # First try to load directly to the wrapped model parameters
-        for name, param in model.named_parameters():
-            param_name = name
-            # Remove '_fsdp_wrapped_module.' prefix if present
-            if '_fsdp_wrapped_module.' in param_name:
-                param_name = param_name.replace('_fsdp_wrapped_module.', '')
-
-            if param_name in checkpoint:
-                if param.shape == checkpoint[param_name].shape:
-                    flat_params[name] = checkpoint[param_name]
-                else:
-                    print(
-                        f"Rank {local_rank}: Shape mismatch for {param_name}: {param.shape} vs {checkpoint[param_name].shape}")
-
-        if flat_params:
-            # Try loading the collected flat parameters
-            try:
-                model.load_state_dict(flat_params, strict=False)
-                print(f"Rank {local_rank}: Successfully loaded {len(flat_params)} parameters")
-            except Exception as e:
-                print(f"Rank {local_rank}: Flat parameter loading failed: {str(e)}")
-
-                # Last resort: load directly to the model's parameter data
-                for name, param in model.named_parameters():
-                    param_name = name.replace('_fsdp_wrapped_module.', '')
-                    if param_name in checkpoint:
-                        if param.shape == checkpoint[param_name].shape:
-                            param.data.copy_(checkpoint[param_name])
-                        else:
-                            print(f"Rank {local_rank}: Shape mismatch, skipping {param_name}")
+    with FSDP.state_dict_type(
+            model,
+            StateDictType.SHARDED_STATE_DICT,
+            ShardedStateDictConfig(offload_to_cpu=False)
+    ):
+        model.load_state_dict(checkpoint,strict=False)
 
     model.eval()
 
@@ -328,21 +289,6 @@ def main(args):
     save_path = args.output_path
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-    # Modify the dit_weight path to directly point to the shard for this rank
-    # checkpoint_dir = args.dit_weight
-    # shard_path = os.path.join(checkpoint_dir, f"model_shard_{local_rank}.pth")
-    #
-    # # Check if shard exists
-    # if not os.path.exists(shard_path):
-    #     raise FileNotFoundError(f"Checkpoint shard not found at {shard_path}")
-    # print(f"Rank {local_rank} using shard: {shard_path}")
-    #
-    # # Override the dit_weight with the specific shard path
-    # args.dit_weight = shard_path
-
-    # Load the model directly with the HunyuanVideoSampler
-    # Since we're passing the specific shard path for this rank,
-    # each sampler will load its own part of the model
     print(f"Rank {rank} loading model...")
     hunyuan_video_sampler = load_hunyuan_sharded_fsdp(models_root_path, rank, args.dit_weight, args)
 
@@ -358,7 +304,7 @@ def main(args):
             prompts = f.readlines()
 
         # add lr_latents:
-        train_dataset = LatentDataset_LR("/scracth/10320/lanqing001/xinrui/FastVideo/data/Inte4K/videos2caption.json",
+        train_dataset = LatentDataset_LR("/scracth/10320/lanqing001/xinrui/FastVideo/data/Inter4K-1088/videos2caption.json",
                                          16, 0.0)
 
         sampler = (LengthGroupedSampler(
@@ -442,7 +388,7 @@ def main(args):
 
     # Wait for all processes to complete
     dist.barrier()
-    print(f"Rank {local_rank} completed")
+    print(f"Rank {rank} completed")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -614,6 +560,11 @@ if __name__ == "__main__":
 
     parser.add_argument("--group_frame", action="store_true")
     parser.add_argument("--group_resolution", action="store_true")
+
+    parser.add_argument("--sp_size",
+                        type=int,
+                        default=1,
+                        help="For sequence parallel")
 
     args = parser.parse_args()
     # process for vae sequence parallel

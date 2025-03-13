@@ -58,7 +58,8 @@ srun -N 8 -n 8 \
      --dit-weight ${CHECKPOINT_DIR} \
      --vae-sp \
      --model_type hunyuan_controlnet \
-     --precision bf16
+     --precision bf16 \
+     --sp_size 4
 
 echo "Inference completed. Check output directory for generated videos."
 
